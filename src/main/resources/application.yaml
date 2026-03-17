@@ -1,0 +1,43 @@
+server:
+  port: 9000
+
+spring:
+  datasource:
+    name: postgres
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres?currentSchema=kyc}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: ${DB_DRIVER_CLASS_NAME:org.postgresql.Driver}
+
+  jpa:
+    database-platform: ${DB_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+    properties:
+      hibernate:
+        default_schema: ${DB_SCHEMA:kyc}
+    hibernate:
+      ddl-auto: none
+
+  sql:
+    init:
+      mode: never
+
+  flyway:
+    out-of-order: false
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres}
+    user: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    schemas: ${DB_SCHEMA:kyc}
+    baselineOnMigrate: true
+    enabled: true
+    validateMigrationNaming: true
+
+keri:
+  url: http://localhost:3901
+  booturl: http://localhost:3903
+  identifier:
+    bran: 0ADF2TpptgqcDE5IQUF1H
+    name: identity
+    role: agent
+  schema:
+    base-url: https://cred-issuance.demo.idw-sandboxes.cf-deployments.org/oobi/
+    said: EL9oOWU_7zQn_rD--Xsgi3giCWnFDaNvFMUGTOZx1ARO

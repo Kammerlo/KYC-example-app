@@ -1,0 +1,33 @@
+x-healthcheck: &healthcheck
+  interval: 2s
+  timeout: 3s
+  retries: 5
+  start_period: 2s
+
+x-python-env: &python-env
+  PYTHONUNBUFFERED: 1
+  PYTHONIOENCODING: UTF-8
+
+
+services:
+  postgres:
+    restart: unless-stopped
+    image: postgres:17
+    hostname: postgres-reeve
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "postgres", "-h", "127.0.0.1", "-d", "postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+      
+volumes:
+  postgres-data:

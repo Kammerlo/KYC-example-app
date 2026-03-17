@@ -1,0 +1,226 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root{
+  --bg: #f7f9fc;
+  --surface: #ffffff;
+  --muted: #6b7280;
+  --accent: #0ea5e9;
+  --accent-600: #0284c7;
+  --border: #e6eef6;
+  --success: #16a34a;
+  --danger: #ef4444;
+  --glass: rgba(14,165,233,0.06);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:#0f172a;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:3rem}
+#app{width:100%;max-width:720px}
+
+h1{font-size:1.4rem;color:var(--accent);margin-bottom:.75rem}
+
+/* ── Stepper header ── */
+.stepper-header {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-bottom: 1rem;
+}
+.step-pill {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .45rem .9rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--muted);
+  box-shadow: 0 1px 2px rgba(16,24,40,.03);
+}
+.step-pill.active {
+  background: linear-gradient(90deg,var(--glass),#ffffff);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.step-pill.done {
+  background: #ecfdf5;
+  color: var(--success);
+  border-color: #bbf7d0;
+}
+.step-connector {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg,transparent,#e6eef6,transparent);
+}
+
+/* Card styles */
+.card {
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 30px rgba(16,24,40,.06);
+}
+.card-title {
+  font-size: .98rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: .15rem;
+}
+.card-subtitle {
+  font-size: .88rem;
+  color: var(--muted);
+  margin-bottom: 1rem;
+}
+
+/* QR Code styles */
+.qr-wrapper {
+  display: flex;
+  justify-content: center;
+}
+.qr-wrapper canvas {
+  background: #fff;
+  border-radius: 12px;
+  padding: 9px;
+  box-shadow: 0 4px 18px rgba(16,24,40,.06);
+}
+
+/* Copy row styles */
+.copy-row {
+  display: flex;
+  gap: .6rem;
+  align-items: center;
+  margin-top: .9rem;
+}
+.copy-row input {
+  flex: 1;
+  background: linear-gradient(180deg,#fbfdff,#ffffff);
+  border: 1px solid var(--border);
+  padding: .6rem .75rem;
+  border-radius: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Button styles */
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  padding: .7rem 1rem;
+  border: none;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-primary:hover {
+  background: var(--accent-600);
+}
+.btn-icon {
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: .55rem .8rem;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+/* Scanner styles */
+.scanner-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px dashed var(--border);
+  background: #000;
+}
+.scanner-wrap video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.scan-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.scan-box {
+  width: 56%;
+  aspect-ratio: 1;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+}
+
+/* Divider styles */
+.divider {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  color: var(--muted);
+  font-size: .85rem;
+  margin: 1rem 0;
+}
+.divider::before, .divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Paste area styles */
+.paste-area {
+  width: 100%;
+  min-height: 80px;
+  border-radius: 10px;
+  padding: .8rem;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg,#fbfdff,#ffffff);
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+/* Status styles */
+.status {
+  margin-top: .8rem;
+  padding: .6rem;
+  border-radius: 10px;
+  text-align: center;
+}
+.status.info {
+  color: var(--muted);
+}
+.status.ok {
+  background: #ecfdf5;
+  color: var(--success);
+  border: 1px solid #bbf7d0;
+}
+.status.err {
+  background: #fff1f2;
+  color: var(--danger);
+  border: 1px solid #fecaca;
+}
+
+.success-icon {
+  font-size: 3rem;
+  text-align: center;
+  margin: 1rem 0 .5rem;
+}
+
+/* Interactive hover effects */
+.card:hover {
+  transform: translateY(-4px);
+  transition: transform .18s;
+}
+.btn-primary:active {
+  transform: translateY(1px);
+}
+
+@media (max-width:520px) {
+  body {
+    padding: 1rem;
+  }
+  #app {
+    padding: 0;
+  }
+}
