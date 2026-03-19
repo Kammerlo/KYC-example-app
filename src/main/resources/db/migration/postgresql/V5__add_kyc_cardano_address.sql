@@ -1,0 +1,2 @@
+ALTER TABLE kyc
+    ADD COLUMN IF NOT EXISTS cardano_address VARCHAR(255);

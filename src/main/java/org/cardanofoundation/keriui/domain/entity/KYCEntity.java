@@ -28,4 +28,16 @@ public class KYCEntity {
 
     @Column(name = "oobi", columnDefinition = "text")
     private String oobi;
+
+    @Column(name = "email", length = 255)
+    private String email;
+
+    @Column(name = "first_name", length = 255)
+    private String firstName;
+
+    @Column(name = "last_name", length = 255)
+    private String lastName;
+
+    @Column(name = "cardano_address", length = 255)
+    private String cardanoAddress;
 }

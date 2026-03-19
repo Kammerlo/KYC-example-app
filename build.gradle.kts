@@ -46,7 +46,15 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     compileOnly("org.projectlombok:lombok:1.18.32")
     annotationProcessor("org.projectlombok:lombok:1.18.32")
-    // KERI
+
+    implementation("com.bloxbean.cardano:yaci-store-spring-boot-starter:0.1.6")
+    implementation("com.bloxbean.cardano:yaci-store-utxo-spring-boot-starter:0.1.6")
+
+    implementation("com.bloxbean.cardano:cardano-client-lib:0.7.1")
+    implementation("com.bloxbean.cardano:cardano-client-backend-blockfrost:0.7.1")
+    implementation("com.bloxbean.cardano:cardano-client-quicktx:0.7.1")
+    implementation("com.bloxbean.cardano:aiken-java-binding:0.1.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.79")
 
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

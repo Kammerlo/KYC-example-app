@@ -10,7 +10,7 @@ import java.util.Objects;
 
 public class IpexNotificationHelper {
 
-    private static final int MAX_RETRIES = 5;
+    private static final int MAX_RETRIES = 20;
     private static final long POLL_INTERVAL_MS = 2000;
 
     /**
@@ -25,7 +25,7 @@ public class IpexNotificationHelper {
         for (int i = 0; i < MAX_RETRIES; i++) {
             Notifying.Notifications.NotificationListResponse response = client.notifications().list();
             List<Notification> notes = Utils.fromJson(response.notes(), new TypeReference<>() {});
-
+            System.out.println("Polled notifications, found " + notes.size() + " total");
             List<Notification> matching = notes.stream()
                     .filter(n -> Objects.equals(route, n.a.r) && !Boolean.TRUE.equals(n.r))
                     .toList();
