@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { type ConnectedWallet, signTx } from '../wallet'
 import { apiGet, apiPost } from '../api'
+import CopyButton from './CopyButton'
 
 interface Props {
   wallet: ConnectedWallet
@@ -91,6 +92,7 @@ function WlStatusCard({ status, wallet, onInitialised }: {
   onInitialised: () => void
 }) {
   const [opStatus, setOpStatus] = useState<OpStatus>({ type: 'idle' })
+  const [lastTxHash, setLastTxHash] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function doInit() {
@@ -112,7 +114,8 @@ function WlStatusCard({ status, wallet, onInitialised }: {
       setOpStatus({ type: 'info', msg: 'Registering Allow List config…' })
       await apiPost('/api/allowlist/register', { bootTxHash: buildData.bootTxHash, bootIndex: buildData.bootIndex })
 
-      setOpStatus({ type: 'ok', msg: `Allow List initialised! Tx: ${(submitData.txHash as string).slice(0, 16)}…` })
+      setLastTxHash(submitData.txHash as string)
+      setOpStatus({ type: 'ok', msg: 'Allow List initialised!' })
       onInitialised()
     } catch (e) {
       setOpStatus({ type: 'err', msg: `Failed: ${e instanceof Error ? e.message : String(e)}` })
@@ -132,7 +135,16 @@ function WlStatusCard({ status, wallet, onInitialised }: {
           {busy ? 'Building transaction…' : 'Initialise Allow List'}
         </button>
         {opStatus.type !== 'idle' && (
-          <p className={`status ${opStatus.type}`}>{opStatus.msg}</p>
+          <div className={`status ${opStatus.type}`}>
+            {opStatus.msg}
+            {opStatus.type === 'ok' && lastTxHash && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', marginTop: '.35rem' }}>
+                <span style={{ fontSize: '.78rem', opacity: .7 }}>Tx:</span>
+                <code style={{ fontSize: '.78rem' }}>{lastTxHash.slice(0, 20)}…</code>
+                <CopyButton text={lastTxHash} />
+              </div>
+            )}
+          </div>
         )}
       </div>
     )
@@ -148,10 +160,12 @@ function WlStatusCard({ status, wallet, onInitialised }: {
         <div className="tel-meta-item">
           <span className="tel-meta-label">Policy</span>
           <code className="tel-mono">{status.policyId.slice(0, 20)}…</code>
+          <CopyButton text={status.policyId} />
         </div>
         <div className="tel-meta-item">
           <span className="tel-meta-label">Script</span>
           <code className="tel-mono">{status.scriptAddress.slice(0, 24)}…</code>
+          <CopyButton text={status.scriptAddress} />
         </div>
       </div>
     </div>
@@ -170,6 +184,7 @@ function WlMembersList({ members, loading, wallet, walletPkh, onRefresh, onChang
 }) {
   const [togglingPkh, setTogglingPkh] = useState<string | null>(null)
   const [toggleStatus, setToggleStatus] = useState<Record<string, OpStatus>>({})
+  const [toggleTxHash, setToggleTxHash] = useState<Record<string, string>>({})
 
   async function doToggle(member: WlMember) {
     const newActive = !member.active
@@ -192,10 +207,8 @@ function WlMembersList({ members, loading, wallet, walletPkh, onRefresh, onChang
       const submitData = await submitRes.json()
       if (!submitRes.ok) throw new Error(submitData.error ?? `HTTP ${submitRes.status}`)
 
-      setToggleStatus(s => ({
-        ...s,
-        [member.pkh]: { type: 'ok', msg: `Updated! Tx: ${(submitData.txHash as string).slice(0, 16)}…` }
-      }))
+      setToggleTxHash(s => ({ ...s, [member.pkh]: submitData.txHash as string }))
+      setToggleStatus(s => ({ ...s, [member.pkh]: { type: 'ok', msg: 'Updated!' } }))
       onChanged()
     } catch (e) {
       setToggleStatus(s => ({
@@ -231,6 +244,7 @@ function WlMembersList({ members, loading, wallet, walletPkh, onRefresh, onChang
               isOwn={m.pkh.toLowerCase() === walletPkh.toLowerCase()}
               toggling={togglingPkh === m.pkh}
               status={toggleStatus[m.pkh]}
+              lastTxHash={toggleTxHash[m.pkh]}
               onToggle={() => doToggle(m)}
               anyToggling={togglingPkh !== null}
             />
@@ -241,11 +255,12 @@ function WlMembersList({ members, loading, wallet, walletPkh, onRefresh, onChang
   )
 }
 
-function WlMemberCard({ member, isOwn, toggling, status, onToggle, anyToggling }: {
+function WlMemberCard({ member, isOwn, toggling, status, lastTxHash, onToggle, anyToggling }: {
   member: WlMember
   isOwn: boolean
   toggling: boolean
   status: OpStatus | undefined
+  lastTxHash: string | undefined
   onToggle: () => void
   anyToggling: boolean
 }) {
@@ -257,11 +272,13 @@ function WlMemberCard({ member, isOwn, toggling, status, onToggle, anyToggling }
           <div className="member-vkey">
             <span className="member-label">PKH</span>
             <code className="tel-mono">{member.pkh.slice(0, 16)}…{member.pkh.slice(-8)}</code>
+            <CopyButton text={member.pkh} />
           </div>
           {member.txHash && (
             <div className="member-utxo">
               <span className="member-label">UTxO</span>
-              <code className="tel-mono">{member.txHash.slice(0, 10)}#{member.outputIndex}</code>
+              <code className="tel-mono">{member.txHash.slice(0, 10)}…#{member.outputIndex}</code>
+              <CopyButton text={`${member.txHash}#${member.outputIndex}`} />
             </div>
           )}
         </div>
@@ -280,7 +297,16 @@ function WlMemberCard({ member, isOwn, toggling, status, onToggle, anyToggling }
         </div>
       </div>
       {status && status.type !== 'idle' && (
-        <p className={`status ${status.type} member-status`}>{status.msg}</p>
+        <div className={`status ${status.type} member-status`}>
+          {status.msg}
+          {status.type === 'ok' && lastTxHash && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', marginTop: '.3rem' }}>
+              <span style={{ fontSize: '.75rem', opacity: .7 }}>Tx:</span>
+              <code style={{ fontSize: '.75rem' }}>{lastTxHash.slice(0, 20)}…</code>
+              <CopyButton text={lastTxHash} />
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

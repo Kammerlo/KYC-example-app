@@ -569,6 +569,34 @@ h1 {
   color: #334155;
 }
 
+/* ── Copy button ── */
+.btn-copy {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: .1rem .38rem;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: .7rem;
+  font-weight: 500;
+  color: var(--muted-2);
+  line-height: 1.5;
+  transition: border-color .12s, color .12s, background .12s;
+  font-family: ui-sans-serif, system-ui;
+}
+.btn-copy:hover {
+  border-color: var(--accent);
+  background: var(--accent-100);
+  color: var(--accent-600);
+}
+.btn-copy--ok {
+  border-color: var(--success-border) !important;
+  background: var(--success-bg) !important;
+  color: var(--success) !important;
+}
+
 /* ── QR + copy ── */
 .qr-wrapper {
   display: flex;

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { type ConnectedWallet, signTx } from '../wallet'
 import { apiGet, apiPost } from '../api'
+import CopyButton from './CopyButton'
 
 interface Props {
   wallet: ConnectedWallet
@@ -99,6 +100,7 @@ function TelStatusCard({ status, wallet, onInitialised }: {
   onInitialised: () => void
 }) {
   const [opStatus, setOpStatus] = useState<OpStatus>({ type: 'idle' })
+  const [lastTxHash, setLastTxHash] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function doInit() {
@@ -120,7 +122,8 @@ function TelStatusCard({ status, wallet, onInitialised }: {
       setOpStatus({ type: 'info', msg: 'Registering TEL config…' })
       await apiPost('/api/tel/register', { bootTxHash: buildData.bootTxHash, bootIndex: buildData.bootIndex })
 
-      setOpStatus({ type: 'ok', msg: `TEL initialised! Tx: ${(submitData.txHash as string).slice(0, 16)}…` })
+      setLastTxHash(submitData.txHash as string)
+      setOpStatus({ type: 'ok', msg: 'TEL initialised!' })
       onInitialised()
     } catch (e) {
       setOpStatus({ type: 'err', msg: `Failed: ${e instanceof Error ? e.message : String(e)}` })
@@ -140,7 +143,16 @@ function TelStatusCard({ status, wallet, onInitialised }: {
           {busy ? 'Building transaction…' : 'Initialise TEL'}
         </button>
         {opStatus.type !== 'idle' && (
-          <p className={`status ${opStatus.type}`}>{opStatus.msg}</p>
+          <div className={`status ${opStatus.type}`}>
+            {opStatus.msg}
+            {opStatus.type === 'ok' && lastTxHash && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', marginTop: '.35rem' }}>
+                <span style={{ fontSize: '.78rem', opacity: .7 }}>Tx:</span>
+                <code style={{ fontSize: '.78rem' }}>{lastTxHash.slice(0, 20)}…</code>
+                <CopyButton text={lastTxHash} />
+              </div>
+            )}
+          </div>
         )}
       </div>
     )
@@ -156,10 +168,12 @@ function TelStatusCard({ status, wallet, onInitialised }: {
         <div className="tel-meta-item">
           <span className="tel-meta-label">Policy</span>
           <code className="tel-mono">{status.policyId.slice(0, 20)}…</code>
+          <CopyButton text={status.policyId} />
         </div>
         <div className="tel-meta-item">
           <span className="tel-meta-label">Script</span>
           <code className="tel-mono">{status.scriptAddress.slice(0, 24)}…</code>
+          <CopyButton text={status.scriptAddress} />
         </div>
       </div>
     </div>
@@ -178,6 +192,7 @@ function TelMembersList({ members, loading, wallet, walletPkh, onRefresh, onMemb
 }) {
   const [removingVkey, setRemovingVkey] = useState<string | null>(null)
   const [removeStatus, setRemoveStatus] = useState<Record<string, OpStatus>>({})
+  const [removeTxHash, setRemoveTxHash] = useState<Record<string, string>>({})
 
   async function doRemove(node: TeNode) {
     setRemovingVkey(node.vkey)
@@ -198,10 +213,8 @@ function TelMembersList({ members, loading, wallet, walletPkh, onRefresh, onMemb
       const submitData = await submitRes.json()
       if (!submitRes.ok) throw new Error(submitData.error ?? `HTTP ${submitRes.status}`)
 
-      setRemoveStatus(s => ({
-        ...s,
-        [node.vkey]: { type: 'ok', msg: `Removed! Tx: ${(submitData.txHash as string).slice(0, 16)}…` }
-      }))
+      setRemoveTxHash(s => ({ ...s, [node.vkey]: submitData.txHash as string }))
+      setRemoveStatus(s => ({ ...s, [node.vkey]: { type: 'ok', msg: 'Removed!' } }))
       onMemberRemoved()
     } catch (e) {
       setRemoveStatus(s => ({
@@ -238,6 +251,7 @@ function TelMembersList({ members, loading, wallet, walletPkh, onRefresh, onMemb
               isOwn={m.pkh.toLowerCase() === walletPkh.toLowerCase()}
               removing={removingVkey === m.vkey}
               status={removeStatus[m.vkey]}
+              lastTxHash={removeTxHash[m.vkey]}
               onRemove={() => doRemove(m)}
               anyRemoving={removingVkey !== null}
             />
@@ -248,12 +262,13 @@ function TelMembersList({ members, loading, wallet, walletPkh, onRefresh, onMemb
   )
 }
 
-function MemberCard({ member, index, isOwn, removing, status, onRemove, anyRemoving }: {
+function MemberCard({ member, index, isOwn, removing, status, lastTxHash, onRemove, anyRemoving }: {
   member: TeNode
   index: number
   isOwn: boolean
   removing: boolean
   status: OpStatus | undefined
+  lastTxHash: string | undefined
   onRemove: () => void
   anyRemoving: boolean
 }) {
@@ -268,11 +283,13 @@ function MemberCard({ member, index, isOwn, removing, status, onRemove, anyRemov
           <div className="member-vkey">
             <span className="member-label">Vkey</span>
             <code className="tel-mono">{member.vkey.slice(0, 16)}…{member.vkey.slice(-8)}</code>
+            <CopyButton text={member.vkey} />
           </div>
           {member.txHash && (
             <div className="member-utxo">
               <span className="member-label">UTxO</span>
-              <code className="tel-mono">{member.txHash.slice(0, 10)}#{member.outputIndex}</code>
+              <code className="tel-mono">{member.txHash.slice(0, 10)}…#{member.outputIndex}</code>
+              <CopyButton text={`${member.txHash}#${member.outputIndex}`} />
             </div>
           )}
         </div>
@@ -307,7 +324,16 @@ function MemberCard({ member, index, isOwn, removing, status, onRemove, anyRemov
         </div>
       </div>
       {status && status.type !== 'idle' && (
-        <p className={`status ${status.type} member-status`}>{status.msg}</p>
+        <div className={`status ${status.type} member-status`}>
+          {status.msg}
+          {status.type === 'ok' && lastTxHash && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', marginTop: '.3rem' }}>
+              <span style={{ fontSize: '.75rem', opacity: .7 }}>Tx:</span>
+              <code style={{ fontSize: '.75rem' }}>{lastTxHash.slice(0, 20)}…</code>
+              <CopyButton text={lastTxHash} />
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
@@ -321,6 +347,7 @@ function AddEntityCard({ wallet, onAdded }: {
 }) {
   const [vkey, setVkey] = useState('')
   const [opStatus, setOpStatus] = useState<OpStatus>({ type: 'idle' })
+  const [lastTxHash, setLastTxHash] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function doAdd() {
@@ -346,7 +373,8 @@ function AddEntityCard({ wallet, onAdded }: {
       const submitData = await submitRes.json()
       if (!submitRes.ok) throw new Error(submitData.error ?? `HTTP ${submitRes.status}`)
 
-      setOpStatus({ type: 'ok', msg: `Submitted! Tx: ${(submitData.txHash as string).slice(0, 16)}… — will appear after chain indexing.` })
+      setLastTxHash(submitData.txHash as string)
+      setOpStatus({ type: 'ok', msg: 'Entity added — will appear after chain indexing.' })
       setVkey('')
       onAdded()
     } catch (e) {
@@ -382,7 +410,16 @@ function AddEntityCard({ wallet, onAdded }: {
         {busy ? 'Building transaction…' : 'Add to TEL'}
       </button>
       {opStatus.type !== 'idle' && (
-        <p className={`status ${opStatus.type}`}>{opStatus.msg}</p>
+        <div className={`status ${opStatus.type}`}>
+          {opStatus.msg}
+          {opStatus.type === 'ok' && lastTxHash && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', marginTop: '.35rem' }}>
+              <span style={{ fontSize: '.78rem', opacity: .7 }}>Tx:</span>
+              <code style={{ fontSize: '.78rem' }}>{lastTxHash.slice(0, 20)}…</code>
+              <CopyButton text={lastTxHash} />
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

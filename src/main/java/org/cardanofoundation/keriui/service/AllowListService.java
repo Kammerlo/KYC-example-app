@@ -1,7 +1,6 @@
 package org.cardanofoundation.keriui.service;
 
 import com.bloxbean.cardano.aiken.AikenScriptUtil;
-import com.bloxbean.cardano.aiken.AikenTransactionEvaluator;
 import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.address.Address;
 import com.bloxbean.cardano.client.address.AddressProvider;
@@ -104,8 +103,8 @@ public class AllowListService {
 
         buildWlScript(tePolicyId, bootTxHash, bootIndex);
 
-        // Head datum: empty-PKH sentinel, active=false, next=Empty
-        ConstrPlutusData headDatum = wlNodeDatum("", false, null);
+        // Head datum: empty-PKH sentinel, active=true, next=Empty
+        ConstrPlutusData headDatum = wlNodeDatum("", true, null);
         PlutusData redeemer = constr(0);
 
         Utxo teEntityUtxo = findEntityTelUtxo(backend, entityPkh);
@@ -126,7 +125,6 @@ public class AllowListService {
         Transaction unsignedTx = builder.compose(scriptTx, tx)
                 .feePayer(entityAddress)
                 .withRequiredSigners(HexUtil.decodeHexString(entityPkh))
-                .withTxEvaluator(new AikenTransactionEvaluator(backend))
                 .build();
 
         return new AllowListBuildResult(unsignedTx.serializeToHex(), wlScriptAddress, wlPolicyId, bootTxHash, bootIndex);
@@ -231,7 +229,6 @@ public class AllowListService {
         Transaction unsignedTx = builder.compose(scriptTx, tx)
                 .feePayer(entityAddress)
                 .withRequiredSigners(HexUtil.decodeHexString(entityPkh))
-                .withTxEvaluator(new AikenTransactionEvaluator(backend))
                 .build();
 
         return unsignedTx.serializeToHex();

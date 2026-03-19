@@ -3,6 +3,7 @@ import QRCode from 'qrcode'
 import jsQR from 'jsqr'
 import { apiGet, apiPost } from '../api'
 import { getAvailableWallets, connectWalletByKey, type ConnectedWallet } from '../wallet'
+import CopyButton from './CopyButton'
 
 type CredentialData = { email: string; firstName: string; lastName: string }
 type Step = 1 | 2 | 3 | 4 | 'done'
@@ -280,6 +281,7 @@ function Step4({
   const [txCbor, setTxCbor] = useState<string | null>(null)
   const [buildStatus, setBuildStatus] = useState<{ type: string; msg: string } | null>(null)
   const [submitStatus, setSubmitStatus] = useState<{ type: string; msg: string } | null>(null)
+  const [submittedTxHash, setSubmittedTxHash] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const availableWallets = getAvailableWallets()
@@ -336,7 +338,8 @@ function Step4({
         throw new Error(err.error ?? `HTTP ${res.status}`)
       }
       const data: { txHash: string } = await res.json()
-      setSubmitStatus({ type: 'ok', msg: `Submitted! Tx: ${data.txHash.slice(0, 16)}…` })
+      setSubmittedTxHash(data.txHash)
+      setSubmitStatus({ type: 'ok', msg: 'Transaction submitted!' })
       setTimeout(onNext, 1200)
     } catch (e) {
       setSubmitStatus({ type: 'err', msg: `${e instanceof Error ? e.message : String(e)}` })
@@ -386,10 +389,14 @@ function Step4({
       {!wallet ? (
         <div>
           {storedAddress && (
-            <p className="status info" style={{ marginBottom: '.75rem' }}>
-              Registered address: <code style={{ fontSize: '.8rem' }}>{storedAddress.slice(0, 24)}…</code>
-              <br />Connect your wallet to sign the transaction.
-            </p>
+            <div className="status info" style={{ marginBottom: '.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', flexWrap: 'wrap', marginBottom: '.2rem' }}>
+                <span style={{ fontSize: '.85rem' }}>Registered address:</span>
+                <code style={{ fontSize: '.8rem' }}>{storedAddress.slice(0, 22)}…</code>
+                <CopyButton text={storedAddress} />
+              </div>
+              <span style={{ fontSize: '.83rem' }}>Connect your wallet to sign the transaction.</span>
+            </div>
           )}
           {!storedAddress && (
             <p className="card-subtitle" style={{ marginBottom: '.75rem' }}>
@@ -416,9 +423,15 @@ function Step4({
         </div>
       ) : (
         <div>
-          <p className="status ok" style={{ marginBottom: '1rem' }}>
-            ✓ {wallet.name} connected — {activeAddress?.slice(0, 22)}…
-          </p>
+          <div className="status ok" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' }}>
+            <span>✓ {wallet.name} connected</span>
+            {activeAddress && (
+              <>
+                <code style={{ fontSize: '.82rem' }}>{activeAddress.slice(0, 22)}…</code>
+                <CopyButton text={activeAddress} />
+              </>
+            )}
+          </div>
 
           {!txCbor ? (
             <button className="btn-primary" onClick={buildTx} disabled={busy}>
@@ -436,9 +449,16 @@ function Step4({
             </p>
           )}
           {submitStatus && (
-            <p className={`status ${submitStatus.type}`} style={{ marginTop: '.5rem' }}>
+            <div className={`status ${submitStatus.type}`} style={{ marginTop: '.5rem' }}>
               {submitStatus.msg}
-            </p>
+              {submitStatus.type === 'ok' && submittedTxHash && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', marginTop: '.35rem' }}>
+                  <span style={{ fontSize: '.78rem', opacity: .7 }}>Tx:</span>
+                  <code style={{ fontSize: '.78rem' }}>{submittedTxHash.slice(0, 20)}…</code>
+                  <CopyButton text={submittedTxHash} />
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -461,11 +481,3 @@ function StepDone({ onRestart }: { onRestart: () => void }) {
   )
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  async function copy() {
-    await navigator.clipboard.writeText(text).catch(() => {})
-    setCopied(true); setTimeout(() => setCopied(false), 1600)
-  }
-  return <button className="btn-icon" onClick={copy}>{copied ? '✓ Copied' : 'Copy'}</button>
-}
