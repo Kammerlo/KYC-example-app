@@ -29,9 +29,14 @@ import org.cardanofoundation.keriui.util.IpexNotificationHelper;
 import org.cardanofoundation.signify.app.Exchanging;
 import org.cardanofoundation.signify.app.clienting.SignifyClient;
 import org.cardanofoundation.signify.app.coring.Operation;
+import org.cardanofoundation.signify.app.credentialing.credentials.CredentialData;
+import org.cardanofoundation.signify.app.credentialing.credentials.IssueCredentialResult;
 import org.cardanofoundation.signify.app.credentialing.ipex.IpexAdmitArgs;
 import org.cardanofoundation.signify.app.credentialing.ipex.IpexAgreeArgs;
 import org.cardanofoundation.signify.app.credentialing.ipex.IpexApplyArgs;
+import org.cardanofoundation.signify.app.credentialing.ipex.IpexGrantArgs;
+import org.cardanofoundation.signify.app.credentialing.registries.CreateRegistryArgs;
+import org.cardanofoundation.signify.app.credentialing.registries.RegistryResult;
 import org.cardanofoundation.signify.cesr.util.CESRStreamUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -85,6 +90,9 @@ public class KeriController {
 
     @Value("${keri.identifier.name}")
     private String identifierName;
+
+    @Value("${keri.identifier.registry-name}")
+    private String registryName;
 
     /** Mnemonic of the Trusted Entity that signs WL Add endorsements. */
     @Value("${keri.signing-mnemonic}")
@@ -443,6 +451,121 @@ public class KeriController {
         kycRepository.save(kyc);
         log.info("Stored Allow List tx hash for session={}: {}", sessionId, txHash);
         return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    /**
+     * Issues a USER credential directly to the wallet's AID for users who don't have one.
+     * Issues the ACDC on the KERI agent, grants it via IPEX, stores it in the KYC record,
+     * and returns a CredentialResponse so the frontend can proceed to step 4.
+     */
+    @PostMapping("/credential/issue")
+    public ResponseEntity<?> issueCredential(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestBody Map<String, String> body) throws Exception {
+        if (sessionId == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "X-Session-Id header required"));
+        }
+        Optional<KYCEntity> kycEntityOpt = kycRepository.findById(sessionId);
+        if (kycEntityOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String firstName = body.get("firstName");
+        String lastName  = body.get("lastName");
+        String email     = body.get("email");
+        if (firstName == null || lastName == null || email == null ||
+                firstName.isBlank() || lastName.isBlank() || email.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "firstName, lastName and email are required"));
+        }
+
+        Role role = Role.USER;
+        SchemaConfig.SchemaEntry schemaEntry = schemaConfig.getSchemaForRole(role);
+        if (schemaEntry == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "No USER schema configured"));
+        }
+
+        KYCEntity kycEntity = kycEntityOpt.get();
+        String walletAid = kycEntity.getAid();
+        String datetime  = KERI_DATETIME.format(LocalDateTime.now(ZoneOffset.UTC));
+
+        // Get or create the credential registry
+        String registrySaid = getOrCreateRegistrySaid();
+
+        // Build credential subject with the user-supplied attributes
+        Map<String, Object> additionalProps = new LinkedHashMap<>();
+        additionalProps.put("firstName", firstName);
+        additionalProps.put("lastName",  lastName);
+        additionalProps.put("email",     email);
+
+        CredentialData.CredentialSubject subject = CredentialData.CredentialSubject.builder()
+                .i(walletAid)
+                .dt(datetime)
+                .additionalProperties(additionalProps)
+                .build();
+
+        CredentialData credentialData = CredentialData.builder()
+                .i(identifierConfig.getPrefix())
+                .ri(registrySaid)
+                .s(schemaEntry.getSaid())
+                .a(subject)
+                .build();
+
+        // Issue the ACDC on the KERI agent
+        IssueCredentialResult issueResult = client.credentials().issue(identifierName, credentialData);
+        client.operations().wait(issueResult.getOp());
+
+        String credentialSaid = issueResult.getAcdc().getKed().get("d").toString();
+        log.info("Issued credential SAID={} for session={}", credentialSaid, sessionId);
+
+        // Grant the credential to the wallet via IPEX
+        IpexGrantArgs grantArgs = IpexGrantArgs.builder()
+                .senderName(identifierName)
+                .recipient(walletAid)
+                .message("")
+                .datetime(KERI_DATETIME.format(LocalDateTime.now(ZoneOffset.UTC)))
+                .acdc(issueResult.getAcdc())
+                .iss(issueResult.getIss())
+                .anc(issueResult.getAnc())
+                .build();
+        Exchanging.ExchangeMessageResult grantResult = client.ipex().grant(grantArgs);
+        Object grantOp = client.ipex().submitGrant(identifierName, grantResult.exn(),
+                grantResult.sigs(), grantResult.atc(), Collections.singletonList(walletAid));
+        client.operations().wait(Operation.fromObject(grantOp));
+
+        // Persist credential to the KYC record (same pattern as presentCredential)
+        try {
+            kycEntity.setCredentialAid(credentialSaid);
+            kycEntity.setCredentialSaid(schemaEntry.getSaid());
+            kycEntity.setCredentialAttributes(objectMapper.writeValueAsString(additionalProps));
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize credential attributes", e);
+        }
+        kycEntity.setCredentialRole(role.getValue());
+        kycRepository.save(kycEntity);
+
+        return ResponseEntity.ok(new CredentialResponse(role.name(), role.getValue(),
+                schemaEntry.getLabel(), additionalProps));
+    }
+
+    /** Returns the SAID of the first credential registry for this identifier, creating one if needed. */
+    @SuppressWarnings("unchecked")
+    private String getOrCreateRegistrySaid() throws Exception {
+        List<Map<String, Object>> registries =
+                (List<Map<String, Object>>) client.registries().list(identifierName);
+        if (registries != null && !registries.isEmpty()) {
+            return registries.get(0).get("regk").toString();
+        }
+        log.info("No credential registry found, creating '{}'", registryName);
+        CreateRegistryArgs args = CreateRegistryArgs.builder()
+                .name(identifierName)
+                .registryName(registryName)
+                .noBackers(true)
+                .build();
+        RegistryResult result = client.registries().create(args);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> opMap = objectMapper.readValue(result.op(), Map.class);
+        client.operations().wait(Operation.fromObject(opMap));
+        return result.getRegser().getPre();
     }
 
     /**
