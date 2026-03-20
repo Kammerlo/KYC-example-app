@@ -84,6 +84,7 @@ public class AllowListService {
         try {
             buildWlScript(c.getTePolicyId(), c.getBootTxHash(), c.getBootIndex());
             customUtxoStorage.setAllowListPolicyId(c.getPolicyId());
+            customUtxoStorage.setAllowListScriptAddress(c.getScriptAddress());
             log.info("AllowList config restored: {}", c.getPolicyId());
         } catch (Exception e) {
             log.error("Failed to restore AllowList config from DB", e);
@@ -149,6 +150,7 @@ public class AllowListService {
                 .build();
         allowListConfigRepository.save(config);
         customUtxoStorage.setAllowListPolicyId(wlPolicyId);
+        customUtxoStorage.setAllowListScriptAddress(wlScriptAddress);
         log.info("AllowList config registered at {}", wlScriptAddress);
         return config;
     }

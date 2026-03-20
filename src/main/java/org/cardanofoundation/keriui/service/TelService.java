@@ -91,6 +91,7 @@ public class TelService {
         try {
             buildTeScript(c.getIssuerVkey(), c.getBootTxHash(), c.getBootIndex());
             customUtxoStorage.setTelPolicyId(c.getPolicyId());
+            customUtxoStorage.setTelScriptAddress(c.getScriptAddress());
             log.info("TEL config restored: {}", c.getPolicyId());
         } catch (Exception e) {
             log.error("Failed to restore TEL config from DB", e);
@@ -206,6 +207,7 @@ public class TelService {
                 .build();
         telConfigRepository.save(config);
         customUtxoStorage.setTelPolicyId(tePolicyId);
+        customUtxoStorage.setTelScriptAddress(teScriptAddress);
         log.info("TEL config registered at {}", teScriptAddress);
         return config;
     }
