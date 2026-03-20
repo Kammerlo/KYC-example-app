@@ -11,7 +11,8 @@ import java.util.Optional;
 
 import lombok.extern.slf4j.Slf4j;
 
-import org.cardanofoundation.keriui.domain.IdentifierConfig;
+import org.cardanofoundation.keriui.config.SchemaConfig;
+import org.cardanofoundation.keriui.domain.dto.IdentifierConfig;
 import org.cardanofoundation.signify.app.aiding.CreateIdentifierArgs;
 import org.cardanofoundation.signify.app.aiding.EventResult;
 import org.cardanofoundation.signify.app.clienting.SignifyClient;
@@ -38,8 +39,7 @@ public class KeriConfig {
     public SignifyClient signifyClient(@Value("${keri.url}") String url,
                                        @Value("${keri.identifier.bran}") String bran,
                                        @Value("${keri.booturl}") String bootUrl,
-                                       @Value("${keri.schema.base-url}") String baseUrl,
-                                       @Value("${keri.schema.said}") String schemaSaid) throws Exception {
+                                       SchemaConfig schemaConfig) throws Exception {
         SignifyClient client = new SignifyClient(url, bran, Salter.Tier.low, bootUrl, null);
         try {
             client.connect();
@@ -48,8 +48,12 @@ public class KeriConfig {
             client.connect();
         }
 
-        Object resolve = client.oobis().resolve(baseUrl + schemaSaid, null);
-        Operation<Object> wait = client.operations().wait(Operation.fromObject(resolve));
+        if (schemaConfig.getSchemas() != null) {
+            for (SchemaConfig.SchemaEntry entry : schemaConfig.getSchemas().values()) {
+                Object resolve = client.oobis().resolve(schemaConfig.getBaseUrl() + entry.getSaid(), null);
+                client.operations().wait(Operation.fromObject(resolve));
+            }
+        }
 
         return client;
     }
@@ -179,7 +183,7 @@ public class KeriConfig {
                     }
                 }
             } catch (Exception e) {
-                System.out.println("Error parsing oobi URL: " + oobi + " - " + e.getMessage());
+                log.warn("Error parsing oobi URL: {} - {}", oobi, e.getMessage());
             }
         }
 

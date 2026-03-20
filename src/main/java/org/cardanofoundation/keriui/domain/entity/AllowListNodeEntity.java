@@ -35,4 +35,7 @@ public class AllowListNodeEntity {
     @Column(name = "active", nullable = false)
     private Boolean active;
 
+    @Column(name = "role", nullable = false)
+    private Integer role;
+
 }

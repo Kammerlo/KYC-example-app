@@ -39,4 +39,7 @@ public class TeNodeEntity {
     @Column(name = "vkey", nullable = false)
     private String vkey;
 
+    @Column(name = "role", nullable = false)
+    private Integer role;
+
 }

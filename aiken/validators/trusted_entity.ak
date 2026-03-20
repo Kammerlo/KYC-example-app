@@ -4,6 +4,7 @@ use cardano/assets.{PolicyId}
 use cardano/transaction.{Input, OutputReference, Transaction}
 use kyc/types.{
   Empty, Key, PubKeyHash, TEAdd, TEDeinit, TEInit, TENode, TERedeemer, TERemove,
+  VLei,
 }
 use kyc/utils.{
   covers_key, te_nodes_from_inputs, te_nodes_from_outputs, te_prefix,
@@ -39,7 +40,7 @@ validator trusted_entity(issuer_pkh: PubKeyHash, oref: OutputReference) {
 
         expect [head_out] = node_outs
         let head_datum_ok =
-          blake2b_224(head_out.node.vkey) == issuer_pkh && head_out.node.next == Empty
+          blake2b_224(head_out.node.vkey) == issuer_pkh && head_out.node.role == VLei && head_out.node.next == Empty
 
         let must_mint_head = validate_mint(mint, policy_id, te_prefix, 1)
 
@@ -62,7 +63,7 @@ validator trusted_entity(issuer_pkh: PubKeyHash, oref: OutputReference) {
       //
       // Before:  … → covering_node → covering_node.next → …
       // After:   … → covering_node[next:=new_pkh] → new_node → covering_node.next → …
-      TEAdd { new_vkey, covering_node } -> {
+      TEAdd { new_vkey, new_role, covering_node } -> {
         // Derive pkh from vkey for sorting / minting
         let new_pkh = blake2b_224(new_vkey)
         let covering_pkh = blake2b_224(covering_node.vkey)
@@ -87,7 +88,7 @@ validator trusted_entity(issuer_pkh: PubKeyHash, oref: OutputReference) {
 
         // New node output
         let new_node_expected =
-          TENode { vkey: new_vkey, next: covering_node.next }
+          TENode { vkey: new_vkey, role: new_role, next: covering_node.next }
         let must_new_node =
           list.any(node_outs, fn(p) { p.node == new_node_expected })
 

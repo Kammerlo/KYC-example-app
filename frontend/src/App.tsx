@@ -9,7 +9,7 @@ export type Role = 'issuer' | 'entity' | 'user'
 
 type Phase =
   | { tag: 'wallet-connect' }
-  | { tag: 'app'; wallet: ConnectedWallet; role: Role; pkh: string }
+  | { tag: 'app'; wallet: ConnectedWallet; role: Role; pkh: string; teRole?: number }
 
 function roleLabel(role: Role) {
   return role === 'issuer' ? 'Issuer' : role === 'entity' ? 'Trusted Entity' : 'User'
@@ -21,8 +21,8 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>({ tag: 'wallet-connect' })
   const [issuerTab, setIssuerTab] = useState<IssuerTab>('tel')
 
-  function handleConnected(wallet: ConnectedWallet, role: Role, pkh: string) {
-    setPhase({ tag: 'app', wallet, role, pkh })
+  function handleConnected(wallet: ConnectedWallet, role: Role, pkh: string, teRole?: number) {
+    setPhase({ tag: 'app', wallet, role, pkh, teRole })
   }
 
   function handleDisconnect() {

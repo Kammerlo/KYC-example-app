@@ -29,15 +29,16 @@ public class KYCEntity {
     @Column(name = "oobi", columnDefinition = "text")
     private String oobi;
 
-    @Column(name = "email", length = 255)
-    private String email;
-
-    @Column(name = "first_name", length = 255)
-    private String firstName;
-
-    @Column(name = "last_name", length = 255)
-    private String lastName;
-
     @Column(name = "cardano_address", length = 255)
     private String cardanoAddress;
+
+    @Column(name = "credential_attributes", columnDefinition = "text")
+    private String credentialAttributes;
+
+    @Column(name = "credential_role")
+    private Integer credentialRole;
+
+    /** Transaction hash of the Allow List Add tx. Set after the user joins the Allow List. */
+    @Column(name = "allowlist_tx_hash", length = 64)
+    private String allowListTxHash;
 }

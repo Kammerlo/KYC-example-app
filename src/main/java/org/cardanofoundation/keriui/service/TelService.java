@@ -24,6 +24,9 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction;
 import com.bloxbean.cardano.client.util.HexUtil;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.cardanofoundation.keriui.domain.Role;
+import org.cardanofoundation.keriui.domain.dto.RoleInfo;
+import org.cardanofoundation.keriui.domain.dto.TelInitResponse;
 import org.cardanofoundation.keriui.domain.entity.TeNodeEntity;
 import org.cardanofoundation.keriui.domain.entity.TelConfigEntity;
 import org.cardanofoundation.keriui.domain.repository.TelConfigRepository;
@@ -111,26 +114,38 @@ public class TelService {
         return tePolicyId;
     }
 
-    /** Returns the role for a given wallet payment-key-hash (28-byte hex). */
+    /** Returns the role name for a given wallet payment-key-hash (28-byte hex). */
     public String roleForPkh(String walletPkh) {
-        log.debug("roleForPkh: wallet={} issuerPkh={}", walletPkh, issuerPkhHex);
+        return roleInfoForPkh(walletPkh).roleName();
+    }
+
+    /** Returns full role info for a given wallet payment-key-hash (28-byte hex). */
+    public RoleInfo roleInfoForPkh(String walletPkh) {
+        log.debug("roleInfoForPkh: wallet={} issuerPkh={}", walletPkh, issuerPkhHex);
         if (!issuerPkhHex.isBlank() && walletPkh.equalsIgnoreCase(issuerPkhHex)) {
-            return "issuer";
+            return new RoleInfo("issuer", Role.VLEI);
         }
-        boolean isEntity = teNodeRepository.findAll().stream()
-                .anyMatch(n -> walletPkh.equalsIgnoreCase(pkhFrom(n.getVkey())));
-        return isEntity ? "entity" : "user";
+        Optional<TeNodeEntity> teNode = teNodeRepository.findAll().stream()
+                .filter(n -> walletPkh.equalsIgnoreCase(pkhFrom(n.getVkey())))
+                .findFirst();
+        if (teNode.isPresent()) {
+            Role teRole = teNode.get().getRole() != null
+                    ? Role.fromValue(teNode.get().getRole())
+                    : Role.USER;
+            return new RoleInfo("entity", teRole);
+        }
+        return new RoleInfo("user", null);
     }
 
     // ── Transaction building (unsigned – frontend signs via CIP-30) ───────────
 
     /**
      * Build an unsigned TEL Init transaction.
-     * The backend picks the boot UTxO from the issuer's address via the blockfrost API,
+     * The backend picks the boot UTxO from the issuer's address via the Blockfrost API,
      * builds the Plutus transaction body, and returns the unsigned CBOR hex.
      * The frontend must sign it with the CIP-30 wallet and submit.
      */
-    public TelBuildResult buildInitTx(String issuerAddress) throws Exception {
+    public TelInitResponse buildInitTx(String issuerAddress) throws Exception {
         requireVkey();
         requireNotInitialised();
 
@@ -145,7 +160,8 @@ public class TelService {
         buildTeScript(issuerPkh, bootTxHash, bootIndex);
 
         // Datum vkey field must be the raw 32-byte Ed25519 public key (script hashes it to verify PKH)
-        ConstrPlutusData headDatum = teNodeDatum(issuerVkeyHex, null);
+        // Head/issuer node always gets vLEI role (2)
+        ConstrPlutusData headDatum = teNodeDatum(issuerVkeyHex, 2, null);
         PlutusData redeemer = constr(0);
 
         ScriptTx scriptTx = new ScriptTx()
@@ -164,7 +180,7 @@ public class TelService {
                 .withRequiredSigners(HexUtil.decodeHexString(issuerPkh))
                 .build();
 
-        return new TelBuildResult(
+        return new TelInitResponse(
                 unsignedTx.serializeToHex(),
                 teScriptAddress,
                 tePolicyId,
@@ -198,7 +214,7 @@ public class TelService {
      * Build an unsigned TEL Add transaction.
      * Frontend signs and submits; members appear once the chain watcher indexes the block.
      */
-    public String buildAddTx(String entityVkeyHex, String issuerAddress) throws Exception {
+    public String buildAddTx(String entityVkeyHex, int role, String issuerAddress) throws Exception {
         requireInitialised();
         requireVkey();
 
@@ -211,15 +227,16 @@ public class TelService {
         Utxo coveringUtxo = findCoveringNode(backend, entityPkh);
         TeDatumInfo coveringInfo = decodeTeDatum(coveringUtxo.getInlineDatum());
 
-        ConstrPlutusData coveringDatum   = teNodeDatum(coveringInfo.vkeyHex(), coveringInfo.nextPkh());
-        ConstrPlutusData updatedCovering = teNodeDatum(coveringInfo.vkeyHex(), entityPkh);
-        ConstrPlutusData entityNode      = teNodeDatum(entityVkeyHex, coveringInfo.nextPkh());
+        ConstrPlutusData coveringDatum   = teNodeDatum(coveringInfo.vkeyHex(), coveringInfo.role(), coveringInfo.nextPkh());
+        ConstrPlutusData updatedCovering = teNodeDatum(coveringInfo.vkeyHex(), coveringInfo.role(), entityPkh);
+        ConstrPlutusData entityNode      = teNodeDatum(entityVkeyHex, role, coveringInfo.nextPkh());
 
         // The covering node may be the head ("TEL") or any entity node ("TEL"+pkh) —
         // extract its token name dynamically so the output preserves the right token.
         String coveringTokenName = getCoveringTokenName(coveringUtxo);
 
-        PlutusData redeemer = constr(2, bytes(entityVkeyHex), coveringDatum);
+        // TEAdd redeemer: Constr 2 [new_vkey, new_role_enum, covering_node]
+        PlutusData redeemer = constr(2, bytes(entityVkeyHex), constr(role), coveringDatum);
 
         ScriptTx spendTx = new ScriptTx()
                 .collectFrom(coveringUtxo, redeemer)
@@ -318,11 +335,11 @@ public class TelService {
         TeDatumInfo removedInfo = decodeTeDatum(removedUtxo.getInlineDatum());
 
         // Redeemer: TERemove { remove_vkey, covering_node }
-        ConstrPlutusData coveringDatum = teNodeDatum(coveringInfo.vkeyHex(), coveringInfo.nextPkh());
+        ConstrPlutusData coveringDatum = teNodeDatum(coveringInfo.vkeyHex(), coveringInfo.role(), coveringInfo.nextPkh());
         PlutusData redeemer = constr(3, bytes(entityVkeyHex), coveringDatum);
 
         // Updated covering: next restored to what the removed node was pointing to
-        ConstrPlutusData updatedCovering = teNodeDatum(coveringInfo.vkeyHex(), removedInfo.nextPkh());
+        ConstrPlutusData updatedCovering = teNodeDatum(coveringInfo.vkeyHex(), coveringInfo.role(), removedInfo.nextPkh());
 
         // Determine the covering node's token name
         String coveringTokenName = getCoveringTokenName(coveringUtxo);
@@ -459,23 +476,30 @@ public class TelService {
             PlutusData raw = PlutusData.deserialize(HexUtil.decodeHexString(inlineDatumHex));
             ConstrPlutusData c = (ConstrPlutusData) raw;
             List<PlutusData> fields = c.getData().getPlutusDataList();
+            // TENode datum: [vkey(0), role(1), next(2)]
+            // role is now a Plutus enum: Constr 0 [] = User, Constr 1 [] = Institutional, Constr 2 [] = VLei
             String vkeyHex = HexUtil.encodeHexString(((BytesPlutusData) fields.get(0)).getValue());
-            ConstrPlutusData nextConstr = (ConstrPlutusData) fields.get(1);
+            int role = (int) ((ConstrPlutusData) fields.get(1)).getAlternative();
+            ConstrPlutusData nextConstr = (ConstrPlutusData) fields.get(2);
             String nextPkh = nextConstr.getAlternative() == 1 ? null
                     : HexUtil.encodeHexString(
                             ((BytesPlutusData) nextConstr.getData().getPlutusDataList().get(0)).getValue());
-            return new TeDatumInfo(vkeyHex, nextPkh);
+            return new TeDatumInfo(vkeyHex, role, nextPkh);
         } catch (Exception e) {
             throw new RuntimeException("Failed to decode TENode datum", e);
         }
     }
 
-    private record TeDatumInfo(String vkeyHex, String nextPkh) {}
+    private record TeDatumInfo(String vkeyHex, int role, String nextPkh) {}
 
     // ── PlutusData helpers ────────────────────────────────────────────────────
 
-    private ConstrPlutusData teNodeDatum(String vkeyHex, String nextPkh) {
-        return (ConstrPlutusData) constr(0, bytes(vkeyHex), nodeKey(nextPkh));
+    /**
+     * Builds a TENode datum: Constr 0 [vkey_bytes, role_constr, next_key]
+     * The role is serialised as a Plutus enum: Constr &lt;alt&gt; [] where alt = role value (0/1/2).
+     */
+    private ConstrPlutusData teNodeDatum(String vkeyHex, int role, String nextPkh) {
+        return (ConstrPlutusData) constr(0, bytes(vkeyHex), constr(role), nodeKey(nextPkh));
     }
 
     private PlutusData nodeKey(String pkh) {
@@ -531,12 +555,4 @@ public class TelService {
             throw new IllegalStateException("cardano.issuer.vkey is not configured");
     }
 
-    // ── Result type ───────────────────────────────────────────────────────────
-
-    public record TelBuildResult(
-            String txCbor,
-            String scriptAddress,
-            String policyId,
-            String bootTxHash,
-            int bootIndex) {}
 }

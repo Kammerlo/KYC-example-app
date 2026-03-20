@@ -21,6 +21,7 @@ import com.bloxbean.cardano.client.transaction.spec.Transaction;
 import com.bloxbean.cardano.client.util.HexUtil;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import org.cardanofoundation.keriui.domain.dto.WlInitResponse;
 import org.cardanofoundation.keriui.domain.entity.AllowListConfigEntity;
 import org.cardanofoundation.keriui.domain.entity.AllowListNodeEntity;
 import org.cardanofoundation.keriui.domain.repository.AllowListConfigRepository;
@@ -88,7 +89,7 @@ public class AllowListService {
 
     // ── Transaction building ──────────────────────────────────────────────────
 
-    public AllowListBuildResult buildInitTx(String entityAddress) throws Exception {
+    public WlInitResponse buildInitTx(String entityAddress) throws Exception {
         requireTelInitialised();
         requireNotInitialised();
 
@@ -103,8 +104,8 @@ public class AllowListService {
 
         buildWlScript(tePolicyId, bootTxHash, bootIndex);
 
-        // Head datum: empty-PKH sentinel, active=true, next=Empty
-        ConstrPlutusData headDatum = wlNodeDatum("", true, null);
+        // Head datum: empty-PKH sentinel, active=true, role=vLEI(2), next=Empty
+        ConstrPlutusData headDatum = wlNodeDatum("", true, 2, null);
         PlutusData redeemer = constr(0);
 
         Utxo teEntityUtxo = findEntityTelUtxo(backend, entityPkh);
@@ -127,7 +128,7 @@ public class AllowListService {
                 .withRequiredSigners(HexUtil.decodeHexString(entityPkh))
                 .build();
 
-        return new AllowListBuildResult(unsignedTx.serializeToHex(), wlScriptAddress, wlPolicyId, bootTxHash, bootIndex);
+        return new WlInitResponse(unsignedTx.serializeToHex(), wlScriptAddress, wlPolicyId, bootTxHash, bootIndex);
     }
 
     public AllowListConfigEntity registerConfig(String bootTxHash, int bootIndex) throws Exception {
@@ -150,7 +151,7 @@ public class AllowListService {
     }
 
     /** Build an unsigned AllowList Add transaction (no endorsement — entity signature suffices). */
-    public String buildAddTx(String userPkh, String entityAddress) throws Exception {
+    public String buildAddTx(String userPkh, int role, String entityAddress) throws Exception {
         requireInitialised();
 
         BackendService backend = new BFBackendService(blockfrostUrl, blockfrostKey);
@@ -163,12 +164,12 @@ public class AllowListService {
         WlDatumInfo coveringInfo = decodeWlDatum(coveringUtxo.getInlineDatum());
         String coveringTokenName = getCoveringWlTokenName(coveringUtxo);
 
-        ConstrPlutusData coveringDatum = wlNodeDatum(coveringInfo.pkhHex(), coveringInfo.active(), coveringInfo.nextPkh());
-        ConstrPlutusData updatedCovering = wlNodeDatum(coveringInfo.pkhHex(), coveringInfo.active(), userPkh);
-        ConstrPlutusData userNode = wlNodeDatum(userPkh, true, coveringInfo.nextPkh());
+        ConstrPlutusData coveringDatum = wlNodeDatum(coveringInfo.pkhHex(), coveringInfo.active(), coveringInfo.role(), coveringInfo.nextPkh());
+        ConstrPlutusData updatedCovering = wlNodeDatum(coveringInfo.pkhHex(), coveringInfo.active(), coveringInfo.role(), userPkh);
+        ConstrPlutusData userNode = wlNodeDatum(userPkh, true, role, coveringInfo.nextPkh());
 
-        // Redeemer: constr(2, [userPkh, coveringNode])
-        PlutusData redeemer = constr(2, bytes(userPkh), coveringDatum);
+        // WLAdd redeemer: Constr 2 [new_pkh, new_role_enum, covering_node]
+        PlutusData redeemer = constr(2, bytes(userPkh), constr(role), coveringDatum);
 
         log.info("buildAddTx: userPkh={} coveringToken={} entityPkh={}", userPkh, coveringTokenName, entityPkh);
 
@@ -210,7 +211,7 @@ public class AllowListService {
         Utxo userUtxo = findWlUtxoByToken(backend, WL_PREFIX_HEX + userPkh);
         WlDatumInfo currentInfo = decodeWlDatum(userUtxo.getInlineDatum());
 
-        ConstrPlutusData updatedNode = wlNodeDatum(userPkh, newActive, currentInfo.nextPkh());
+        ConstrPlutusData updatedNode = wlNodeDatum(userPkh, newActive, currentInfo.role(), currentInfo.nextPkh());
         PlutusData redeemer = constr(3, bytes(userPkh), constr(newActive ? 1 : 0));
 
         log.info("buildSetActiveTx: userPkh={} newActive={} entityPkh={}", userPkh, newActive, entityPkh);
@@ -243,7 +244,7 @@ public class AllowListService {
      *  3. Build the WL Add transaction with the endorsement embedded in the redeemer.
      *  4. Return the unsigned CBOR — the user signs it with their CIP-30 wallet.
      */
-    public String buildAddTxWithEndorsement(String userAddress, String signingMnemonic) throws Exception {
+    public String buildAddTxWithEndorsement(String userAddress, String signingMnemonic, int role) throws Exception {
         requireInitialised();
 
         Account entityAccount = Account.createFromMnemonic(Networks.preview(), signingMnemonic);
@@ -269,21 +270,22 @@ public class AllowListService {
         String coveringTokenName = getCoveringWlTokenName(coveringUtxo);
 
         ConstrPlutusData coveringDatum = wlNodeDatum(
-                coveringInfo.pkhHex(), coveringInfo.active(), coveringInfo.nextPkh());
+                coveringInfo.pkhHex(), coveringInfo.active(), coveringInfo.role(), coveringInfo.nextPkh());
         ConstrPlutusData updatedCovering = wlNodeDatum(
-                coveringInfo.pkhHex(), coveringInfo.active(), userPkh);
-        ConstrPlutusData userNode = wlNodeDatum(userPkh, true, coveringInfo.nextPkh());
+                coveringInfo.pkhHex(), coveringInfo.active(), coveringInfo.role(), userPkh);
+        ConstrPlutusData userNode = wlNodeDatum(userPkh, true, role, coveringInfo.nextPkh());
 
         // Entity signs user's PKH bytes off-chain — 64-byte Ed25519 signature
         byte[] userPkhBytes = HexUtil.decodeHexString(userPkh);
         byte[] entityEndorsement = new EdDSASigningProvider()
                 .signExtended(userPkhBytes, entityAccount.hdKeyPair().getPrivateKey().getKeyData());
 
-        log.info("buildAddTxWithEndorsement: userPkh={} entityPkh={}", userPkh, entityPkh);
+        log.info("buildAddTxWithEndorsement: userPkh={} entityPkh={} role={}", userPkh, entityPkh, role);
 
-        // Redeemer: constr(2, [userPkh, coveringNode, entityVkey32, entityEndorsement64])
+        // WLAdd redeemer: Constr 2 [new_pkh, new_role_enum, covering_node, entity_vkey, entity_endorsement]
         PlutusData redeemer = constr(2,
                 bytes(userPkh),
+                constr(role),
                 coveringDatum,
                 BytesPlutusData.of(entityVkeyRaw),
                 BytesPlutusData.of(entityEndorsement));
@@ -464,26 +466,32 @@ public class AllowListService {
             PlutusData raw = PlutusData.deserialize(HexUtil.decodeHexString(inlineDatumHex));
             ConstrPlutusData c = (ConstrPlutusData) raw;
             List<PlutusData> fields = c.getData().getPlutusDataList();
+            // WLNode datum: [pkh(0), active(1), role(2), next(3)]
+            // role is now a Plutus enum: Constr 0 [] = User, Constr 1 [] = Institutional, Constr 2 [] = VLei
             String pkhHex = HexUtil.encodeHexString(((BytesPlutusData) fields.get(0)).getValue());
             ConstrPlutusData activeConstr = (ConstrPlutusData) fields.get(1);
             boolean active = activeConstr.getAlternative() == 1;
-            ConstrPlutusData nextConstr = (ConstrPlutusData) fields.get(2);
+            int role = (int) ((ConstrPlutusData) fields.get(2)).getAlternative();
+            ConstrPlutusData nextConstr = (ConstrPlutusData) fields.get(3);
             String nextPkh = nextConstr.getAlternative() == 1 ? null
                     : HexUtil.encodeHexString(
                             ((BytesPlutusData) nextConstr.getData().getPlutusDataList().get(0)).getValue());
-            return new WlDatumInfo(pkhHex, active, nextPkh);
+            return new WlDatumInfo(pkhHex, active, role, nextPkh);
         } catch (Exception e) {
             throw new RuntimeException("Failed to decode WLNode datum", e);
         }
     }
 
-    private record WlDatumInfo(String pkhHex, boolean active, String nextPkh) {}
+    private record WlDatumInfo(String pkhHex, boolean active, int role, String nextPkh) {}
 
     // ── PlutusData helpers ────────────────────────────────────────────────────
 
-    /** WLNode = constr(0, [pkh_bytes, Bool, NodeKey]) */
-    private ConstrPlutusData wlNodeDatum(String pkhHex, boolean active, String nextPkh) {
-        return (ConstrPlutusData) constr(0, bytes(pkhHex), constr(active ? 1 : 0), nodeKey(nextPkh));
+    /**
+     * Builds a WLNode datum: Constr 0 [pkh_bytes, active_bool, role_constr, next_key]
+     * The role is serialised as a Plutus enum: Constr &lt;alt&gt; [] where alt = role value (0/1/2).
+     */
+    private ConstrPlutusData wlNodeDatum(String pkhHex, boolean active, int role, String nextPkh) {
+        return (ConstrPlutusData) constr(0, bytes(pkhHex), constr(active ? 1 : 0), constr(role), nodeKey(nextPkh));
     }
 
     private PlutusData nodeKey(String pkh) {
@@ -534,7 +542,4 @@ public class AllowListService {
         if (isInitialised()) throw new IllegalStateException("AllowList already initialised");
     }
 
-    // ── Result types ─────────────────────────────────────────────────────────
-
-    public record AllowListBuildResult(String txCbor, String scriptAddress, String policyId, String bootTxHash, int bootIndex) {}
 }

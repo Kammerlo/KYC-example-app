@@ -75,14 +75,19 @@ public class CustomUtxoStorage extends UtxoStorageImpl {
             try {
                 ConstrPlutusData constr = ConstrPlutusData.deserialize(di);
                 ListPlutusData data = constr.getData();
-                BytesPlutusData vKey = (BytesPlutusData) data.getPlutusDataList().getFirst();
+                // TENode datum: [vkey(0), role(1), next(2)]
+                // role is a Plutus enum: Constr 0 [] = User, Constr 1 [] = Institutional, Constr 2 [] = VLei
+                BytesPlutusData vKey = (BytesPlutusData) data.getPlutusDataList().get(0);
+                ConstrPlutusData rolePd = (ConstrPlutusData) data.getPlutusDataList().get(1);
+                int role = (int) rolePd.getAlternative();
                 TeNodeEntity entity = TeNodeEntity.builder()
                         .vkey(HexUtil.encodeHexString(vKey.getValue()))
+                        .role(role)
                         .txHash(utxo.getTxHash())
                         .outputIndex(utxo.getOutputIndex())
                         .nodePolicyId(notLovelaceAmt.get().getPolicyId())
                         .build();
-                log.info("Saving TE Node: {}", entity.getNodePolicyId());
+                log.info("Saving TE Node: {} role={}", entity.getNodePolicyId(), role);
                 teNodeRepository.save(entity);
             } catch (CborDeserializationException e) {
                 throw new RuntimeException(e);
@@ -101,19 +106,24 @@ public class CustomUtxoStorage extends UtxoStorageImpl {
             try {
                 ConstrPlutusData constr = ConstrPlutusData.deserialize(di);
                 ListPlutusData data = constr.getData();
-                BytesPlutusData pkhPlutusData = (BytesPlutusData) data.getPlutusDataList().getFirst();
+                // WLNode datum: [pkh(0), active(1), role(2), next(3)]
+                // role is a Plutus enum: Constr 0 [] = User, Constr 1 [] = Institutional, Constr 2 [] = VLei
+                BytesPlutusData pkhPlutusData = (BytesPlutusData) data.getPlutusDataList().get(0);
                 ConstrPlutusData activeConstr = (ConstrPlutusData) data.getPlutusDataList().get(1);
-                boolean active = activeConstr.getAlternative() == 0 ? false : true;
+                boolean active = activeConstr.getAlternative() != 0;
+                ConstrPlutusData rolePd = (ConstrPlutusData) data.getPlutusDataList().get(2);
+                int role = (int) rolePd.getAlternative();
                 // Use the full unit (policyId + assetName) as PK so multiple nodes in the same WL are unique
                 AllowListNodeEntity allowListNodeEntity = AllowListNodeEntity.builder()
                         .pkh(HexUtil.encodeHexString(pkhPlutusData.getValue()))
                         .active(active)
+                        .role(role)
                         .nodePolicyId(notLovelaceAmt.get().getPolicyId())
                         .txHash(utxo.getTxHash())
                         .outputIndex(utxo.getOutputIndex())
                         .build();
                 allowListNodeRepository.save(allowListNodeEntity);
-                log.info("Saving allow list entry for vKey: {}", HexUtil.encodeHexString(pkhPlutusData.getValue()));
+                log.info("Saving allow list entry for pkh: {} role={}", HexUtil.encodeHexString(pkhPlutusData.getValue()), role);
             } catch (CborDeserializationException e) {
                 throw new RuntimeException(e);
             }

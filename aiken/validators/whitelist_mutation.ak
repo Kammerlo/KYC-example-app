@@ -6,6 +6,7 @@ use cardano/transaction.{
 }
 use kyc/types.{
   Empty, Key, WLAdd, WLConfig, WLDeinit, WLInit, WLNode, WLRedeemer, WLSetActive,
+  role_lte,
 }
 use kyc/utils.{
   covers_key, signed_by_te, te_nodes_from_inputs, validate_mint,
@@ -95,6 +96,7 @@ validator whitelist(cfg: WLConfig) {
       // ── WLAdd ──────────────────────────────────────────────────────────────
       WLAdd {
         new_pkh,
+        new_role,
         covering_node,
         endorsing_entity_vkey,
         entity_endorsement,
@@ -114,10 +116,12 @@ validator whitelist(cfg: WLConfig) {
           )
 
         // 3. The endorsing entity's vkey must be stored in a TEL node visible in
-        //    reference inputs — the raw 32-byte key is stored on-chain so any user
-        //    can look it up without needing the entity to reveal it out-of-band
-        let must_entity_in_tel =
-          list.any(te_refs, fn(p) { p.node.vkey == endorsing_entity_vkey })
+        //    reference inputs; the user's requested role must not exceed the entity's role.
+        // The endorsing entity must appear in TEL reference inputs, and the requested
+        // role must not exceed the entity's own role (enforced by role_lte).
+        expect Some(endorsing_pair) =
+          list.find(te_refs, fn(p) { p.node.vkey == endorsing_entity_vkey })
+        let must_role_constrained = role_lte(new_role, endorsing_pair.node.role)
 
         // 4. Covering node straddles new_pkh
         // Head sentinel has an empty pkh byte-array — treat as Empty NodeKey
@@ -137,7 +141,7 @@ validator whitelist(cfg: WLConfig) {
 
         // 6. New node output must exist with correct fields and active = True
         let new_node_expected =
-          WLNode { pkh: new_pkh, active: True, next: covering_node.next }
+          WLNode { pkh: new_pkh, active: True, role: new_role, next: covering_node.next }
         let must_new_node =
           list.any(node_outs, fn(p) { p.node == new_node_expected })
 
@@ -145,7 +149,7 @@ validator whitelist(cfg: WLConfig) {
         let must_mint =
           validate_mint(mint, policy_id, wl_token_name(new_pkh), 1)
 
-        must_user_signed? && must_endorsement_valid? && must_entity_in_tel? && must_covers? && must_pred_updated? && must_new_node? && must_mint?
+        must_user_signed? && must_endorsement_valid? && must_role_constrained? && must_covers? && must_pred_updated? && must_new_node? && must_mint?
       }
 
       // WLSetActive is handled in the spend endpoint below

@@ -12,12 +12,36 @@ pub type NodeKey {
   Empty
 }
 
+/// Trust / privilege level.
+/// Serialises as a Plutus Constr with no fields:
+///   User          → Constr 0 []
+///   Institutional → Constr 1 []
+///   VLei          → Constr 2 []
+pub type Role {
+  User
+  Institutional
+  VLei
+}
+
+/// True if role `a` is at most role `b` (User ≤ Institutional ≤ VLei).
+pub fn role_lte(a: Role, b: Role) -> Bool {
+  when (a, b) is {
+    (User, _) -> True
+    (Institutional, Institutional) -> True
+    (Institutional, VLei) -> True
+    (VLei, VLei) -> True
+    _ -> False
+  }
+}
+
 // ── Trusted Entity List ────────────────────────────────────────────────────────
 
 /// Node datum for the Trusted Entity List.
 pub type TENode {
   /// Raw 32-byte Ed25519 verification key (sort key is blake2b_224(vkey))
   vkey: ByteArray,
+  /// Trust level of this entity
+  role: Role,
   next: NodeKey,
 }
 
@@ -28,7 +52,7 @@ pub type TERedeemer {
   /// Tear down an empty list.
   TEDeinit
   /// Add a new trusted entity.  Covering node must be provided for insertion order.
-  TEAdd { new_vkey: ByteArray, covering_node: TENode }
+  TEAdd { new_vkey: ByteArray, new_role: Role, covering_node: TENode }
   /// Remove a trusted entity.  Covering node must be provided.
   TERemove { remove_vkey: ByteArray, covering_node: TENode }
 }
@@ -41,6 +65,8 @@ pub type WLNode {
   pkh: PubKeyHash,
   /// Whether this user is currently allowed to transact
   active: Bool,
+  /// Trust level assigned to this user
+  role: Role,
   next: NodeKey,
 }
 
@@ -57,11 +83,14 @@ pub type WLRedeemer {
   ///      produced off-chain by the trusted entity's private key.
   ///   3. `endorsing_entity_vkey` is the corresponding 32-byte raw Ed25519 public key.
   ///      Its blake2b_224 hash must match a TEL member visible in reference inputs.
+  ///   4. `new_role` must be ≤ the endorsing entity's role in the TEL (enforced by `role_lte`).
   ///
   /// This allows the trusted entity to sign off-chain and hand the user a
   /// "credential" they can use to add themselves without any further co-operation.
   WLAdd {
     new_pkh: PubKeyHash,
+    /// Role to assign to the new user
+    new_role: Role,
     covering_node: WLNode,
     /// Raw 32-byte Ed25519 verification key of the trusted entity
     endorsing_entity_vkey: ByteArray,

@@ -43,8 +43,17 @@ keri:
     role: agent
   schema:
     base-url: https://cred-issuance.demo.idw-sandboxes.cf-deployments.org/oobi/
-    said: EL9oOWU_7zQn_rD--Xsgi3giCWnFDaNvFMUGTOZx1ARO
-  signing-mnemonic: ${KERI_SIGNING_MNEMONIC:test test test test test test test test test test test test test test test test test test test test test test test sauce}
+    schemas:
+      USER:
+        said: EL9oOWU_7zQn_rD--Xsgi3giCWnFDaNvFMUGTOZx1ARO # Foundation Employee Credential
+        label: "Basic KYC"
+      INSTITUTIONAL:
+        said: ${KERI_SCHEMA_INSTITUTIONAL_SAID:ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY} # Legal Entity vLEI Credential
+        label: "Institutional KYC"
+      VLEI:
+        said: ${KERI_SCHEMA_VLEI_SAID:ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY} # Legal Entity vLEI Credential
+        label: "vLEI Credential"
+  signing-mnemonic: ${KERI_SIGNING_MNEMONIC:nest wild farm beyond decide arm chuckle home raven card parrot nothing crazy casino hub broken scan height marine movie gloom village common off}
 
 cardano:
   blockfrost:
@@ -61,8 +70,8 @@ store:
     host: ${STORE_CARDANO_HOST:preview-node.play.dev.cardano.org}
     port: ${STORE_CARDANO_PORT:3001}
     protocol-magic: 2
-    sync-start-slot: 107155208
-    sync-start-blockhash: 0031e5d9e37a9077e9b5e2b234b438ad6bb2e14528011d6c4e31c167741e5ae6
+    sync-start-slot: 107340013
+    sync-start-blockhash: d07edc13515019f7a3f95fe05749cb8eecbcdfc0e76418059ca3d4dc38893ef0
 #    protocol-magic: 42
 #    # for devnet we must specify the genesis files for Yaci-Store
 #    byron-genesis-file: classpath:/devkit/byron-genesis.json

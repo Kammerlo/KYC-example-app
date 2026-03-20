@@ -19,7 +19,11 @@ interface TeNode {
   txHash: string
   outputIndex: number
   pkh: string
+  role: number
+  roleName: string
 }
+
+const TE_ROLE_LABELS: Record<number, string> = { 0: 'User', 1: 'Institutional', 2: 'vLEI' }
 
 type OpStatus =
   | { type: 'idle' }
@@ -279,7 +283,12 @@ function MemberCard({ member, index, isOwn, removing, status, lastTxHash, onRemo
       <div className="member-card-header">
         <div className="member-index">#{index + 1}</div>
         <div className="member-details">
-          {isOwn && <span className="member-own-badge">Your wallet</span>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.15rem' }}>
+            {isOwn && <span className="member-own-badge">Your wallet</span>}
+            <span className={`te-role-badge te-role-${member.role ?? 2}`}>
+              {TE_ROLE_LABELS[member.role ?? 2] ?? member.roleName ?? 'vLEI'}
+            </span>
+          </div>
           <div className="member-vkey">
             <span className="member-label">Vkey</span>
             <code className="tel-mono">{member.vkey.slice(0, 16)}…{member.vkey.slice(-8)}</code>
@@ -346,6 +355,7 @@ function AddEntityCard({ wallet, onAdded }: {
   onAdded: () => void
 }) {
   const [vkey, setVkey] = useState('')
+  const [role, setRole] = useState(2)
   const [opStatus, setOpStatus] = useState<OpStatus>({ type: 'idle' })
   const [lastTxHash, setLastTxHash] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -360,6 +370,7 @@ function AddEntityCard({ wallet, onAdded }: {
     try {
       const buildRes = await apiPost('/api/tel/build-add', {
         entityVkeyHex: vkey,
+        role,
         issuerAddress: wallet.changeAddress,
       })
       const buildData = await buildRes.json()
@@ -406,6 +417,15 @@ function AddEntityCard({ wallet, onAdded }: {
           <span className="vkey-valid"> ✓ valid</span>
         )}
       </div>
+      <select
+        className="tel-select"
+        value={role}
+        onChange={e => setRole(Number(e.target.value))}
+      >
+        <option value={0}>User</option>
+        <option value={1}>Institutional</option>
+        <option value={2}>vLEI</option>
+      </select>
       <button className="btn-primary" onClick={doAdd} disabled={busy || vkey.length !== 64}>
         {busy ? 'Building transaction…' : 'Add to TEL'}
       </button>

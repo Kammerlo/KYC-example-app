@@ -4,7 +4,7 @@ import { apiGet, apiPost } from '../api'
 import type { Role } from '../App'
 
 interface Props {
-  onConnected: (wallet: ConnectedWallet, role: Role, pkh: string) => void
+  onConnected: (wallet: ConnectedWallet, role: Role, pkh: string, teRole?: number) => void
 }
 
 type Status = { type: 'idle' } | { type: 'info'; msg: string } | { type: 'err'; msg: string }
@@ -70,9 +70,10 @@ export default function WalletConnect({ onConnected }: Props) {
         const d = await roleRes.json()
         throw new Error(d.error ?? `HTTP ${roleRes.status}`)
       }
-      const { role } = await roleRes.json()
+      const roleData = await roleRes.json()
+      const { role, teRole } = roleData as { role: string; teRole?: number }
 
-      onConnected(wallet, role as Role, pkh)
+      onConnected(wallet, role as Role, pkh, teRole)
     } catch (e) {
       setStatus({ type: 'err', msg: `Connection failed: ${e instanceof Error ? e.message : String(e)}` })
       setConnecting(false)

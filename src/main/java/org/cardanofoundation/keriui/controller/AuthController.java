@@ -4,6 +4,8 @@ import com.bloxbean.cardano.client.address.Address;
 import com.bloxbean.cardano.client.util.HexUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.cardanofoundation.keriui.domain.dto.RoleDetectionResponse;
+import org.cardanofoundation.keriui.domain.dto.RoleInfo;
 import org.cardanofoundation.keriui.service.AuthService;
 import org.cardanofoundation.keriui.service.TelService;
 import org.springframework.http.ResponseEntity;
@@ -31,9 +33,11 @@ public class AuthController {
      * Detect the role of a connected Cardano wallet.
      * The frontend sends the wallet's change address (bech32); the backend
      * extracts the payment key hash and compares it against:
-     *   - the configured issuer vkey  → "issuer"
-     *   - any vkey stored in the TEL  → "entity"
-     *   - otherwise                   → "user"
+     *   <ul>
+     *     <li>the configured issuer vkey  → role="issuer", teRole=2 (vLEI)</li>
+     *     <li>any vkey stored in the TEL  → role="entity", teRole=their registered role</li>
+     *     <li>otherwise                   → role="user", no teRole</li>
+     *   </ul>
      */
     @PostMapping("/role")
     public ResponseEntity<?> detectRole(@RequestBody RoleRequest body) {
@@ -48,8 +52,12 @@ public class AuthController {
                     .orElseThrow(() -> new IllegalArgumentException("Cannot extract payment key hash from address"));
             String pkhHex = HexUtil.encodeHexString(pkh);
             log.info("detectRole: address={} pkh={}", body.address(), pkhHex);
-            String role = telService.roleForPkh(pkhHex);
-            return ResponseEntity.ok(Map.of("role", role, "pkh", pkhHex));
+
+            RoleInfo roleInfo = telService.roleInfoForPkh(pkhHex);
+            Integer teRole     = roleInfo.teRole() != null ? roleInfo.teRole().getValue() : null;
+            String teRoleName  = roleInfo.teRole() != null ? roleInfo.teRole().name()     : null;
+
+            return ResponseEntity.ok(new RoleDetectionResponse(roleInfo.roleName(), pkhHex, teRole, teRoleName));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -88,6 +96,8 @@ public class AuthController {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
+
+    // ── Request bodies ────────────────────────────────────────────────────────
 
     record RoleRequest(String address) {}
     record VerifyRequest(String sessionId, String address, String signature, String key) {}

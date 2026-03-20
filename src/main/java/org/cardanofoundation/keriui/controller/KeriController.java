@@ -1,19 +1,33 @@
 package org.cardanofoundation.keriui.controller;
 
+import com.bloxbean.cardano.client.account.Account;
+import com.bloxbean.cardano.client.common.model.Networks;
+import com.bloxbean.cardano.client.util.HexUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.cardanofoundation.keriui.domain.IdentifierConfig;
+import org.cardanofoundation.keriui.config.SchemaConfig;
+import org.cardanofoundation.keriui.domain.Role;
+import org.cardanofoundation.keriui.domain.dto.AvailableRolesResponse;
+import org.cardanofoundation.keriui.domain.dto.CredentialResponse;
+import org.cardanofoundation.keriui.domain.dto.IdentifierConfig;
+import org.cardanofoundation.keriui.domain.dto.OobiResponse;
+import org.cardanofoundation.keriui.domain.dto.RoleInfo;
+import org.cardanofoundation.keriui.domain.dto.RoleOption;
+import org.cardanofoundation.keriui.domain.dto.SchemaItem;
+import org.cardanofoundation.keriui.domain.dto.SchemaListResponse;
+import org.cardanofoundation.keriui.domain.dto.SessionResponse;
 import org.cardanofoundation.keriui.domain.entity.KYCEntity;
 import org.cardanofoundation.keriui.domain.repository.KycRepository;
-import org.cardanofoundation.keriui.domain.responses.GetOobiResponse;
 import org.cardanofoundation.keriui.service.AllowListService;
+import org.cardanofoundation.keriui.service.TelService;
 import org.cardanofoundation.keriui.util.IpexNotificationHelper;
 import org.cardanofoundation.signify.app.Exchanging;
 import org.cardanofoundation.signify.app.clienting.SignifyClient;
 import org.cardanofoundation.signify.app.coring.Operation;
 import org.cardanofoundation.signify.app.credentialing.ipex.IpexAgreeArgs;
 import org.cardanofoundation.signify.app.credentialing.ipex.IpexApplyArgs;
-import org.cardanofoundation.signify.core.States;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -27,18 +41,16 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URL;
-import java.security.DigestException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -53,37 +65,49 @@ public class KeriController {
     private final SignifyClient client;
     private final KycRepository kycRepository;
     private final AllowListService allowListService;
-    private static final Pattern OOBI_AID_PATTERN = Pattern.compile("/oobi/([^/]+)");
-    @Value("${keri.identifier.name}")
-    private String identifierName;
-    @Value("${keri.schema.said}")
-    private String schemaSaid;
-    @Value("${keri.schema.base-url}")
-    private String schemaBaseUrl;
-    @Value("${keri.signing-mnemonic}")
-    private String signingMnemonic;
+    private final TelService telService;
+    private final SchemaConfig schemaConfig;
+    private final ObjectMapper objectMapper;
 
+    /** Regex to extract the AID from an OOBI URL path segment. */
+    private static final Pattern OOBI_AID_PATTERN = Pattern.compile("/oobi/([^/]+)");
+
+    /** ISO-8601 datetime format expected by the KERI agent for IPEX messages. */
     private static final DateTimeFormatter KERI_DATETIME =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'+00:00'");
 
+    @Value("${keri.identifier.name}")
+    private String identifierName;
 
+    /** Mnemonic of the Trusted Entity that signs WL Add endorsements. */
+    @Value("${keri.signing-mnemonic}")
+    private String signingMnemonic;
+
+    /** Tracks in-flight presentation threads so they can be interrupted by /credential/cancel. */
+    private final ConcurrentHashMap<String, Thread> activePresentations = new ConcurrentHashMap<>();
+
+    // ── OOBI ──────────────────────────────────────────────────────────────────
+
+    /** Returns the KERI agent's OOBI URL so wallets can resolve this issuer's identifier. */
     @GetMapping("/oobi")
-    public ResponseEntity<GetOobiResponse> getOobi(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) throws IOException, InterruptedException {
+    public ResponseEntity<OobiResponse> getOobi(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId)
+            throws IOException, InterruptedException {
         Optional<Object> o = client.oobis().get(identifierConfig.getName(), null);
-        if (!o.isPresent()) {
+        if (o.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
-        Map<String, Object> stringObjectMap = (Map<String, Object>) o.get();
-        List<String> oobis = (List<String>) stringObjectMap.get("oobis");
-        if(oobis.isEmpty()) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> oobiMap = (Map<String, Object>) o.get();
+        @SuppressWarnings("unchecked")
+        List<String> oobis = (List<String>) oobiMap.get("oobis");
+        if (oobis.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
-        return ResponseEntity.ok(GetOobiResponse.builder()
-                .oobi(oobis.getFirst())
-                .build()
-        );
+        return ResponseEntity.ok(new OobiResponse(oobis.getFirst()));
     }
 
+    /** Resolve a wallet OOBI and persist a KYC session record for the given AID. */
     @GetMapping("/oobi/resolve")
     public ResponseEntity<Boolean> resolveOobi(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
@@ -91,13 +115,13 @@ public class KeriController {
         Object resolve = client.oobis().resolve(oobi, sessionId);
         Operation<Object> wait = client.operations().wait(Operation.fromObject(resolve));
 
-        if(wait.isDone()) {
+        if (wait.isDone()) {
             Matcher matcher = OOBI_AID_PATTERN.matcher(URI.create(oobi).getPath());
             if (!matcher.find()) {
                 throw new IllegalArgumentException("No AID found in OOBI URL: " + oobi);
             }
             String aid = matcher.group(1);
-            Optional<Object> o = client.contacts().get(aid);
+            client.contacts().get(aid);
             KYCEntity kycEntity = KYCEntity.builder()
                     .sessionId(sessionId)
                     .oobi(oobi)
@@ -110,128 +134,259 @@ public class KeriController {
         }
     }
 
+    // ── Schema / role discovery ───────────────────────────────────────────────
+
+    /**
+     * Returns all configured credential schemas with their role, label and SAID.
+     * The frontend uses this to show which credential types are available.
+     */
+    @GetMapping("/schemas")
+    public ResponseEntity<SchemaListResponse> getSchemas() {
+        if (schemaConfig.getSchemas() == null) {
+            return ResponseEntity.ok(new SchemaListResponse(List.of()));
+        }
+        List<SchemaItem> schemas = new ArrayList<>();
+        for (Map.Entry<String, SchemaConfig.SchemaEntry> entry : schemaConfig.getSchemas().entrySet()) {
+            try {
+                Role role = Role.fromString(entry.getKey());
+                schemas.add(new SchemaItem(entry.getKey(), role.getValue(),
+                        entry.getValue().getLabel(), entry.getValue().getSaid()));
+            } catch (IllegalArgumentException e) {
+                log.warn("Unknown role name in schema config: {}", entry.getKey());
+            }
+        }
+        schemas.sort((a, b) -> Integer.compare(a.roleValue(), b.roleValue()));
+        return ResponseEntity.ok(new SchemaListResponse(schemas));
+    }
+
+    /**
+     * Returns the credential roles that the signing entity is authorised to endorse.
+     * A TE with role R can only assign roles 0..R to users (enforced on-chain).
+     */
+    @GetMapping("/available-roles")
+    public ResponseEntity<?> getAvailableRoles() {
+        try {
+            // Derive signing entity's PKH from the configured mnemonic
+            Account entityAccount = Account.createFromMnemonic(Networks.preview(), signingMnemonic);
+            String entityPkh = HexUtil.encodeHexString(
+                    entityAccount.hdKeyPair().getPublicKey().getKeyHash());
+
+            RoleInfo entityRoleInfo = telService.roleInfoForPkh(entityPkh);
+            Role maxRole = entityRoleInfo.teRole();
+            if (maxRole == null) {
+                // Signing entity is not in the TEL — no roles can be assigned
+                return ResponseEntity.ok(new AvailableRolesResponse(List.of(), -1, null));
+            }
+
+            List<RoleOption> availableRoles = new ArrayList<>();
+            if (schemaConfig.getSchemas() != null) {
+                for (Map.Entry<String, SchemaConfig.SchemaEntry> entry : schemaConfig.getSchemas().entrySet()) {
+                    try {
+                        Role role = Role.fromString(entry.getKey());
+                        if (role.getValue() <= maxRole.getValue()) {
+                            availableRoles.add(new RoleOption(entry.getKey(), role.getValue(),
+                                    entry.getValue().getLabel()));
+                        }
+                    } catch (IllegalArgumentException e) {
+                        log.warn("Unknown role name in schema config: {}", entry.getKey());
+                    }
+                }
+            }
+            availableRoles.sort((a, b) -> Integer.compare(a.roleValue(), b.roleValue()));
+            return ResponseEntity.ok(
+                    new AvailableRolesResponse(availableRoles, maxRole.getValue(), maxRole.name()));
+        } catch (Exception e) {
+            log.error("Failed to determine available roles", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ── IPEX credential exchange ───────────────────────────────────────────────
+
+    /**
+     * Runs the full IPEX apply→offer→agree→grant flow to receive a credential from the user's wallet.
+     * Stores the dynamic ACDC attributes in the KYC record and returns them to the frontend.
+     *
+     * @param roleName the credential role to request (e.g. "USER", "INSTITUTIONAL", "VLEI")
+     */
     @GetMapping("/credential/present")
     public ResponseEntity<?> presentCredential(
-            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) throws Exception {
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestParam(value = "role", defaultValue = "USER") String roleName) throws Exception {
         Optional<KYCEntity> kycEntity = kycRepository.findById(sessionId);
-        if(!kycEntity.isPresent()) {
+        if (kycEntity.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
+
+        Role role;
+        try {
+            role = Role.fromString(roleName);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Unknown role: " + roleName));
+        }
+
+        SchemaConfig.SchemaEntry schemaEntry = schemaConfig.getSchemaForRole(role);
+        if (schemaEntry == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "No schema configured for role: " + roleName));
+        }
+
         String aid = kycEntity.get().getAid();
-        IpexApplyArgs args = IpexApplyArgs.builder()
-                .recipient(aid)
-                .senderName(identifierName)
-                .schemaSaid(schemaSaid)
-                .attributes(Map.of("oobiUrl", schemaBaseUrl))
-                .datetime(KERI_DATETIME.format(LocalDateTime.now(ZoneOffset.UTC)))
-                .build();
-        Exchanging.ExchangeMessageResult exchangeMessageResult = client.ipex().apply(args);
-        Object o = client.ipex().submitApply(identifierName, exchangeMessageResult.exn(), exchangeMessageResult.sigs(), Collections.singletonList(aid));
-        Operation<Object> wait = client.operations().wait(Operation.fromObject(o));
-        // ── STEP 2: Wait for /ipex/offer from the wallet ──────────────────────
-        // The Veridian wallet user will see the request and tap "Share" — this
-        // triggers an offer message back to you. Poll until it arrives.
-        System.out.println("⏳ Waiting for wallet to respond with an offer...");
-        IpexNotificationHelper.Notification offerNote =
-                IpexNotificationHelper.waitForNotification(client, "/exn/ipex/offer");
 
-        // Fetch the full offer exchange message to extract the offer SAID
-        Object offerExchange = client.exchanges().get(offerNote.a.d).get();
-        @SuppressWarnings("unchecked")
-        Map<String, Object> offerExn = (Map<String, Object>)
-                ((LinkedHashMap<String, Object>) offerExchange).get("exn");
+        // Register this thread so the /credential/cancel endpoint can interrupt it
+        activePresentations.put(sessionId, Thread.currentThread());
+        try {
+            // Step 1: Send /ipex/apply — request the credential from the wallet
+            IpexApplyArgs applyArgs = IpexApplyArgs.builder()
+                    .recipient(aid)
+                    .senderName(identifierName)
+                    .schemaSaid(schemaEntry.getSaid())
+                    .attributes(Map.of("oobiUrl", schemaConfig.getBaseUrl()))
+                    .datetime(KERI_DATETIME.format(LocalDateTime.now(ZoneOffset.UTC)))
+                    .build();
+            Exchanging.ExchangeMessageResult applyResult = client.ipex().apply(applyArgs);
+            Object applyOp = client.ipex().submitApply(identifierName, applyResult.exn(),
+                    applyResult.sigs(), Collections.singletonList(aid));
+            client.operations().wait(Operation.fromObject(applyOp));
 
-        String offerSaid = offerExn.get("d").toString();
-        String offerP    = offerExn.get("p").toString(); // should match applySaid
+            // Step 2: Wait for /ipex/offer from the wallet
+            log.info("Waiting for wallet to respond with an offer...");
+            IpexNotificationHelper.Notification offerNote =
+                    IpexNotificationHelper.waitForNotification(client, "/exn/ipex/offer");
 
-        System.out.println("✅ Received offer, offerSaid=" + offerSaid + ", linked to apply=" + offerP);
-        IpexNotificationHelper.markAndDelete(client, offerNote);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> offerExn = (Map<String, Object>)
+                    ((LinkedHashMap<String, Object>) client.exchanges().get(offerNote.a.d).get()).get("exn");
 
-        // ── STEP 3: Send /ipex/agree ──────────────────────────────────────────
-        IpexAgreeArgs agreeArgs = IpexAgreeArgs.builder()
-                .senderName(identifierName)
-                .recipient(aid)
-                .offerSaid(offerSaid)       // link back to the offer
-                .datetime(KERI_DATETIME.format(LocalDateTime.now(ZoneOffset.UTC)))
-                .build();
+            String offerSaid = offerExn.get("d").toString();
+            String offerP    = offerExn.get("p").toString();
+            log.info("Received offer: offerSaid={} linked to apply={}", offerSaid, offerP);
+            IpexNotificationHelper.markAndDelete(client, offerNote);
 
-        Exchanging.ExchangeMessageResult agreeResult = client.ipex().agree(agreeArgs);
-        String agreeSaid = agreeResult.exn().getKed().get("d").toString();
+            // Step 3: Send /ipex/agree — accept the offer
+            IpexAgreeArgs agreeArgs = IpexAgreeArgs.builder()
+                    .senderName(identifierName)
+                    .recipient(aid)
+                    .offerSaid(offerSaid)
+                    .datetime(KERI_DATETIME.format(LocalDateTime.now(ZoneOffset.UTC)))
+                    .build();
+            Exchanging.ExchangeMessageResult agreeResult = client.ipex().agree(agreeArgs);
+            String agreeSaid = agreeResult.exn().getKed().get("d").toString();
 
-        Object agreeOp = client.ipex().submitAgree(
-                identifierName,
-                agreeResult.exn(),
-                agreeResult.sigs(),
-                Collections.singletonList(aid)
-        );
-        client.operations().wait(Operation.fromObject(agreeOp));
+            Object agreeOp = client.ipex().submitAgree(identifierName, agreeResult.exn(),
+                    agreeResult.sigs(), Collections.singletonList(aid));
+            client.operations().wait(Operation.fromObject(agreeOp));
 
-        IpexNotificationHelper.Notification grantNote =
-                IpexNotificationHelper.waitForNotification(client, "/exn/ipex/grant");
+            // Step 4: Wait for /ipex/grant — the wallet sends the credential
+            IpexNotificationHelper.Notification grantNote =
+                    IpexNotificationHelper.waitForNotification(client, "/exn/ipex/grant");
 
-        Object grantExchange = client.exchanges().get(grantNote.a.d).get();
-        @SuppressWarnings("unchecked")
-        Map<String, Object> grantExn = (Map<String, Object>)
-                ((Map<String, Object>) grantExchange).get("exn");
-        IpexNotificationHelper.markAndDelete(client, grantNote);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> grantExn = (Map<String, Object>)
+                    ((Map<String, Object>) client.exchanges().get(grantNote.a.d).get()).get("exn");
+            IpexNotificationHelper.markAndDelete(client, grantNote);
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> grantBody = (Map<String, Object>) grantExn.get("e");
-        // Getting extra Arguments
-        Map<String, Object> acdc = (Map<String, Object>) grantBody.get("acdc");
-        Map<String, String> attributes = (Map<String, String>) acdc.get("a");
+            // Extract all ACDC attributes, removing internal KERI fields
+            @SuppressWarnings("unchecked")
+            Map<String, Object> acdc = (Map<String, Object>)
+                    ((Map<String, Object>) grantExn.get("e")).get("acdc");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rawAttributes = (Map<String, Object>) acdc.get("a");
 
-        // Foundation Credential fields
-        String email = attributes.get("email");
-        String firstName = attributes.get("firstName");
-        String lastName = attributes.get("lastName");
+            Map<String, Object> userAttributes = new LinkedHashMap<>(rawAttributes);
+            userAttributes.remove("d"); // ACDC self-addressing identifier
+            userAttributes.remove("i"); // issuer AID
 
-        // Persist credential fields to KYCEntity
-        KYCEntity entity = kycEntity.get();
-        entity.setEmail(email);
-        entity.setFirstName(firstName);
-        entity.setLastName(lastName);
-        kycRepository.save(entity);
+            // Persist credential to the KYC record
+            KYCEntity entity = kycEntity.get();
+            try {
+                entity.setCredentialAttributes(objectMapper.writeValueAsString(userAttributes));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize credential attributes", e);
+            }
+            entity.setCredentialRole(role.getValue());
+            kycRepository.save(entity);
 
-        log.info("✅ IPEX agree sent, agreeSaid={} | KYC stored for session={}", agreeSaid, sessionId);
-        return ResponseEntity.ok(Map.of(
-                "email", email != null ? email : "",
-                "firstName", firstName != null ? firstName : "",
-                "lastName", lastName != null ? lastName : ""
-        ));
+            log.info("IPEX agree sent: agreeSaid={} | KYC stored: session={} role={}", agreeSaid, sessionId, roleName);
+            return ResponseEntity.ok(new CredentialResponse(role.name(), role.getValue(),
+                    schemaEntry.getLabel(), userAttributes));
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.info("Credential presentation cancelled for session={}", sessionId);
+            return ResponseEntity.status(409).body(Map.of("error", "Presentation cancelled."));
+        } catch (RuntimeException e) {
+            if (e.getMessage() != null && e.getMessage().startsWith("Timed out")) {
+                log.info("Credential presentation timed out for session={}", sessionId);
+                return ResponseEntity.status(408)
+                        .body(Map.of("error", "No credential was received — the wallet did not respond in time."));
+            }
+            throw e;
+        } finally {
+            activePresentations.remove(sessionId);
+        }
     }
+
+    /**
+     * Interrupts an in-flight credential presentation for the given session.
+     * The waiting thread's next {@code Thread.sleep()} will throw {@code InterruptedException},
+     * causing {@code presentCredential} to return HTTP 409.
+     */
+    @PostMapping("/credential/cancel")
+    public ResponseEntity<?> cancelPresentation(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (sessionId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "X-Session-Id header required"));
+        }
+        Thread t = activePresentations.get(sessionId);
+        if (t != null) {
+            t.interrupt();
+        }
+        return ResponseEntity.ok(Map.of("cancelled", t != null));
+    }
+
+    // ── Session state ─────────────────────────────────────────────────────────
 
     /** Returns the current KYC + Cardano state for a session. */
     @GetMapping("/session")
-    public ResponseEntity<?> getSession(
+    public ResponseEntity<SessionResponse> getSession(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (sessionId == null) {
-            return ResponseEntity.ok(Map.of("exists", false));
+            return ResponseEntity.ok(SessionResponse.builder().exists(false).build());
         }
         Optional<KYCEntity> opt = kycRepository.findById(sessionId);
         if (opt.isEmpty()) {
-            return ResponseEntity.ok(Map.of("exists", false));
+            return ResponseEntity.ok(SessionResponse.builder().exists(false).build());
         }
         KYCEntity kyc = opt.get();
-        boolean hasCredential = kyc.getFirstName() != null || kyc.getEmail() != null;
+        boolean hasCredential    = kyc.getCredentialAttributes() != null;
         boolean hasCardanoAddress = kyc.getCardanoAddress() != null;
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("exists", true);
-        result.put("hasCredential", hasCredential);
-        result.put("hasCardanoAddress", hasCardanoAddress);
+        SessionResponse.SessionResponseBuilder builder = SessionResponse.builder()
+                .exists(true)
+                .hasCredential(hasCredential)
+                .hasCardanoAddress(hasCardanoAddress);
+
         if (hasCredential) {
-            result.put("firstName", kyc.getFirstName() != null ? kyc.getFirstName() : "");
-            result.put("lastName", kyc.getLastName() != null ? kyc.getLastName() : "");
-            result.put("email", kyc.getEmail() != null ? kyc.getEmail() : "");
+            builder.attributes(resolveAttributes(kyc));
+            builder.credentialRole(kyc.getCredentialRole() != null ? kyc.getCredentialRole() : 0);
+            if (kyc.getCredentialRole() != null) {
+                try {
+                    builder.credentialRoleName(Role.fromValue(kyc.getCredentialRole()).name());
+                } catch (IllegalArgumentException e) {
+                    builder.credentialRoleName("USER");
+                }
+            }
         }
         if (hasCardanoAddress) {
-            result.put("cardanoAddress", kyc.getCardanoAddress());
+            builder.cardanoAddress(kyc.getCardanoAddress());
         }
-        return ResponseEntity.ok(result);
+        if (kyc.getAllowListTxHash() != null) {
+            builder.allowListTxHash(kyc.getAllowListTxHash());
+        }
+        return ResponseEntity.ok(builder.build());
     }
 
-    /** Persists the user's Cardano address (called after CIP-30 wallet connection). */
+    /** Persists the user's Cardano address after CIP-30 wallet connection. */
     @PostMapping("/session/cardano-address")
     public ResponseEntity<?> storeCardanoAddress(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
@@ -246,14 +401,33 @@ public class KeriController {
         KYCEntity kyc = kycRepository.findById(sessionId).get();
         kyc.setCardanoAddress(cardanoAddress);
         kycRepository.save(kyc);
-        log.info("Stored Cardano address for session={}: {}…", sessionId, cardanoAddress.substring(0, Math.min(20, cardanoAddress.length())));
+        log.info("Stored Cardano address for session={}: {}…",
+                sessionId, cardanoAddress.substring(0, Math.min(20, cardanoAddress.length())));
+        return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    /** Persists the Allow List transaction hash after the user has successfully joined. */
+    @PostMapping("/session/allowlist-tx")
+    public ResponseEntity<?> storeAllowListTxHash(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestBody Map<String, String> body) {
+        if (sessionId == null || !kycRepository.existsById(sessionId)) {
+            return ResponseEntity.status(401).body(Map.of("error", "Unknown session"));
+        }
+        String txHash = body.get("txHash");
+        if (txHash == null || txHash.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "txHash is required"));
+        }
+        KYCEntity kyc = kycRepository.findById(sessionId).get();
+        kyc.setAllowListTxHash(txHash);
+        kycRepository.save(kyc);
+        log.info("Stored Allow List tx hash for session={}: {}", sessionId, txHash);
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
     /**
      * Builds an unsigned WL Add transaction using the Cardano address stored for this session.
-     * The entity signs the user's PKH off-chain using keri.signing-mnemonic.
-     * No request body — address is read from the KYCEntity in the DB.
+     * The signing entity endorses the user's PKH off-chain; the role comes from the presented credential.
      */
     @PostMapping("/allowlist/build-add-tx")
     public ResponseEntity<?> buildAllowListAddTx(
@@ -264,16 +438,39 @@ public class KeriController {
         KYCEntity kyc = kycRepository.findById(sessionId).get();
         String userAddress = kyc.getCardanoAddress();
         if (userAddress == null || userAddress.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "No Cardano address on record — please connect your wallet first"));
+            return ResponseEntity.badRequest().body(
+                    Map.of("error", "No Cardano address on record — please connect your wallet first"));
         }
+        int role = kyc.getCredentialRole() != null ? kyc.getCredentialRole() : 0;
         try {
-            String txCbor = allowListService.buildAddTxWithEndorsement(userAddress, signingMnemonic);
+            String txCbor = allowListService.buildAddTxWithEndorsement(userAddress, signingMnemonic, role);
             return ResponseEntity.ok(Map.of("txCbor", txCbor));
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
             log.error("allowlist build-add-tx failed", e);
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+
+    /**
+     * Resolve credential attributes from the KYC record.
+     * Prefers the JSON column; falls back to the legacy first/last/email columns.
+     */
+    private Map<String, Object> resolveAttributes(KYCEntity kyc) {
+        if (kyc.getCredentialAttributes() != null) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> attrs = objectMapper.readValue(kyc.getCredentialAttributes(), Map.class);
+                return attrs;
+            } catch (Exception e) {
+                log.warn("Failed to parse credential attributes for session={}", kyc.getSessionId(), e);
+                return Map.of();
+            }
+        } else {
+            return Map.of();
         }
     }
 }

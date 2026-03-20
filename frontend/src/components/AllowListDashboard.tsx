@@ -18,7 +18,11 @@ interface WlMember {
   outputIndex: number
   pkh: string
   active: boolean
+  role: number
+  roleName: string
 }
+
+const WL_ROLE_LABELS: Record<number, string> = { 0: 'User', 1: 'Institutional', 2: 'vLEI' }
 
 type OpStatus =
   | { type: 'idle' }
@@ -268,7 +272,12 @@ function WlMemberCard({ member, isOwn, toggling, status, lastTxHash, onToggle, a
     <div className={`member-card ${toggling ? 'member-card--removing' : ''}`}>
       <div className="member-card-header">
         <div className="member-details">
-          {isOwn && <span className="member-own-badge">Your wallet</span>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem', marginBottom: '.15rem' }}>
+            {isOwn && <span className="member-own-badge">Your wallet</span>}
+            <span className={`te-role-badge te-role-${member.role ?? 0}`}>
+              {WL_ROLE_LABELS[member.role ?? 0] ?? member.roleName ?? 'User'}
+            </span>
+          </div>
           <div className="member-vkey">
             <span className="member-label">PKH</span>
             <code className="tel-mono">{member.pkh.slice(0, 16)}…{member.pkh.slice(-8)}</code>

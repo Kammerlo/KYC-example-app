@@ -1,0 +1,1 @@
+ALTER TABLE kyc ADD COLUMN IF NOT EXISTS allowlist_tx_hash VARCHAR(64);
