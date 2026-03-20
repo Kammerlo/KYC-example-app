@@ -10,6 +10,8 @@ import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.backend.api.BackendService;
 import com.bloxbean.cardano.client.backend.blockfrost.service.BFBackendService;
 import com.bloxbean.cardano.client.common.model.Networks;
+import com.bloxbean.cardano.client.metadata.MetadataBuilder;
+import com.bloxbean.cardano.client.metadata.MetadataMap;
 import com.bloxbean.cardano.client.plutus.blueprint.PlutusBlueprintUtil;
 import com.bloxbean.cardano.client.plutus.blueprint.model.PlutusVersion;
 import com.bloxbean.cardano.client.plutus.spec.*;
@@ -33,6 +35,7 @@ import org.springframework.stereotype.Service;
 import java.io.InputStream;
 import java.math.BigInteger;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -244,7 +247,7 @@ public class AllowListService {
      *  3. Build the WL Add transaction with the endorsement embedded in the redeemer.
      *  4. Return the unsigned CBOR — the user signs it with their CIP-30 wallet.
      */
-    public String buildAddTxWithEndorsement(String userAddress, String signingMnemonic, int role) throws Exception {
+    public String buildAddTxWithEndorsement(String userAddress, String signingMnemonic, int role, MetadataMap cip170Metadata) throws Exception {
         requireInitialised();
 
         Account entityAccount = Account.createFromMnemonic(Networks.preview(), signingMnemonic);
@@ -301,6 +304,7 @@ public class AllowListService {
 
         ScriptTx mintTx = new ScriptTx()
                 .mintAsset(wlScript, mintAsset(WL_PREFIX_HEX + userPkh, 1), redeemer)
+                .attachMetadata(MetadataBuilder.createMetadata().put(BigInteger.valueOf(170), cip170Metadata))
                 .payToContract(wlScriptAddress,
                         List.of(Amount.lovelace(NODE_MIN_LOVELACE),
                                 Amount.asset(wlPolicyId + WL_PREFIX_HEX + userPkh, 1L)),

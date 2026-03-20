@@ -2,6 +2,9 @@ package org.cardanofoundation.keriui.controller;
 
 import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.common.model.Networks;
+import com.bloxbean.cardano.client.metadata.MetadataBuilder;
+import com.bloxbean.cardano.client.metadata.MetadataList;
+import com.bloxbean.cardano.client.metadata.MetadataMap;
 import com.bloxbean.cardano.client.util.HexUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -26,8 +29,10 @@ import org.cardanofoundation.keriui.util.IpexNotificationHelper;
 import org.cardanofoundation.signify.app.Exchanging;
 import org.cardanofoundation.signify.app.clienting.SignifyClient;
 import org.cardanofoundation.signify.app.coring.Operation;
+import org.cardanofoundation.signify.app.credentialing.ipex.IpexAdmitArgs;
 import org.cardanofoundation.signify.app.credentialing.ipex.IpexAgreeArgs;
 import org.cardanofoundation.signify.app.credentialing.ipex.IpexApplyArgs;
+import org.cardanofoundation.signify.cesr.util.CESRStreamUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -45,7 +50,9 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -283,6 +290,17 @@ public class KeriController {
             @SuppressWarnings("unchecked")
             Map<String, Object> grantExn = (Map<String, Object>)
                     ((Map<String, Object>) client.exchanges().get(grantNote.a.d).get()).get("exn");
+
+            IpexAdmitArgs admitArgs = IpexAdmitArgs.builder()
+                            .senderName(identifierName)
+                            .recipient(aid)
+                            .grantSaid(grantExn.get("d").toString())
+                            .datetime(KERI_DATETIME.format(LocalDateTime.now(ZoneOffset.UTC)))
+                            .message("")
+                            .build();
+            Exchanging.ExchangeMessageResult admit = client.ipex().admit(admitArgs);
+            Object o = client.ipex().submitAdmit(identifierName, admit.exn(), admit.sigs(), agreeResult.atc(), Collections.singletonList(aid));
+            client.operations().wait(Operation.fromObject(o));
             IpexNotificationHelper.markAndDelete(client, grantNote);
 
             // Extract all ACDC attributes, removing internal KERI fields
@@ -293,12 +311,13 @@ public class KeriController {
             Map<String, Object> rawAttributes = (Map<String, Object>) acdc.get("a");
 
             Map<String, Object> userAttributes = new LinkedHashMap<>(rawAttributes);
-            userAttributes.remove("d"); // ACDC self-addressing identifier
             userAttributes.remove("i"); // issuer AID
 
             // Persist credential to the KYC record
             KYCEntity entity = kycEntity.get();
             try {
+                entity.setCredentialAid(acdc.get("d").toString());
+                entity.setCredentialSaid(schemaEntry.getSaid());
                 entity.setCredentialAttributes(objectMapper.writeValueAsString(userAttributes));
             } catch (JsonProcessingException e) {
                 log.warn("Failed to serialize credential attributes", e);
@@ -403,6 +422,7 @@ public class KeriController {
         kycRepository.save(kyc);
         log.info("Stored Cardano address for session={}: {}…",
                 sessionId, cardanoAddress.substring(0, Math.min(20, cardanoAddress.length())));
+
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -443,7 +463,8 @@ public class KeriController {
         }
         int role = kyc.getCredentialRole() != null ? kyc.getCredentialRole() : 0;
         try {
-            String txCbor = allowListService.buildAddTxWithEndorsement(userAddress, signingMnemonic, role);
+            MetadataMap cip170Metadata = buildCip170Metadata(kyc, client);
+            String txCbor = allowListService.buildAddTxWithEndorsement(userAddress, signingMnemonic, role, cip170Metadata);
             return ResponseEntity.ok(Map.of("txCbor", txCbor));
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -451,6 +472,123 @@ public class KeriController {
             log.error("allowlist build-add-tx failed", e);
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    private MetadataMap buildCip170Metadata(KYCEntity entity, SignifyClient client) {
+        MetadataMap metadata = MetadataBuilder.createMap();
+        metadata.put("t", "AUTH_BEGIN");
+        metadata.put("i", entity.getAid());
+        MetadataMap versionMap = MetadataBuilder.createMap();
+        versionMap.put("v", "1.0");
+        versionMap.put("a", "ACDC10");
+        versionMap.put("k", "KERI10");
+        metadata.put("v", versionMap);
+        metadata.put("s", entity.getCredentialSaid());
+        //        metadata.put("m", ""); // Optional field
+        String s = waitForCredential(client, entity.getCredentialAid()).orElseThrow(() -> new IllegalStateException("Credential not found with ID: " + entity.getCredentialAid()));
+        List<Map<String, Object>> cesrData = CESRStreamUtil.parseCESRData(s);
+        String stripped = striptCesrData(cesrData);
+        byte[][] chunks = splitIntoChunks(stripped.getBytes(), 64);
+        MetadataList credentialChunks = MetadataBuilder.createList();
+        for (byte[] chunk : chunks) {
+            credentialChunks.add(chunk);
+        }
+        metadata.put("c", credentialChunks);
+        return metadata;
+    }
+
+    private static byte[][] splitIntoChunks(byte[] data, int chunkSize) {
+        int numChunks = (data.length + chunkSize - 1) / chunkSize;
+        byte[][] chunks = new byte[numChunks][];
+
+        for (int i = 0; i < numChunks; i++) {
+            int start = i * chunkSize;
+            int end = Math.min(start + chunkSize, data.length);
+            chunks[i] = Arrays.copyOfRange(data, start, end);
+        }
+
+        return chunks;
+    }
+
+    private String striptCesrData(List<Map<String, Object>> cesrData) {
+        List<Map<String, Object>> allVcpEvents = new ArrayList<>();
+        List<String> allVcpAttachments = new ArrayList<>();
+        List<Map<String, Object>> allIssEvents = new ArrayList<>();
+        List<String> allIssAttachments = new ArrayList<>();
+        List<Map<String, Object>> allAcdcEvents = new ArrayList<>();
+        List<String> allAcdcAttachments = new ArrayList<>();
+
+        for (Map<String, Object> eventData : cesrData) {
+            Map<String, Object> event = (Map<String, Object>) eventData.get("event");
+
+            // Check for event type
+            Object eventTypeObj = event.get("t");
+            if (eventTypeObj != null) {
+                String eventType = eventTypeObj.toString();
+                switch (eventType) {
+                    case "vcp":
+                        allVcpEvents.add(event);
+                        allVcpAttachments.add((String) eventData.get("atc"));
+                        break;
+                    case "iss":
+                        allIssEvents.add(event);
+                        allIssAttachments.add((String) eventData.get("atc"));
+                        break;
+                }
+            } else {
+                // Check if this is an ACDC (credential data) without "t" field
+                if (event.containsKey("s") && event.containsKey("a") && event.containsKey("i")) {
+                    Object schemaObj = event.get("s");
+                    if (schemaObj != null) {
+                        allAcdcEvents.add(event);
+                        allAcdcAttachments.add("");
+                    }
+                }
+            }
+        }
+
+        List<Map<String, Object>> combinedEvents = new ArrayList<>();
+        List<String> combinedAttachments = new ArrayList<>();
+
+        combinedEvents.addAll(allVcpEvents);
+        combinedEvents.addAll(allIssEvents);
+        combinedEvents.addAll(allAcdcEvents);
+
+        combinedAttachments.addAll(allVcpAttachments);
+        combinedAttachments.addAll(allIssAttachments);
+        combinedAttachments.addAll(allAcdcAttachments);
+
+        return CESRStreamUtil.makeCESRStream(combinedEvents, combinedAttachments);
+    }
+
+    private Optional<String> waitForCredential(SignifyClient client, String credentialId) {
+        int maxAttempts = 10;
+        int waitTimeMs = 2000;
+
+        log.info("Waiting for credential to be available in store...");
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                Optional<String> credential = client.credentials().get(credentialId);
+                if (credential.isPresent()) {
+                    log.info("Credential retrieved successfully!");
+                    return credential;
+                }
+            } catch (Exception e) {
+                log.info("Attempt " + attempt + " failed: " + e.getMessage());
+            }
+
+            if (attempt < maxAttempts) {
+                log.info("Credential not yet available, waiting... (attempt " + attempt + "/" + maxAttempts + ")");
+                try {
+                    Thread.sleep(waitTimeMs);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+
+        return Optional.empty();
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

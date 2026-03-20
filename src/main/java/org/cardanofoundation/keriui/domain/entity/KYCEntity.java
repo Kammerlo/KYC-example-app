@@ -38,6 +38,12 @@ public class KYCEntity {
     @Column(name = "credential_role")
     private Integer credentialRole;
 
+    @Column(name = "credential_aid")
+    private String credentialAid;
+
+    @Column(name = "credential_said")
+    private String credentialSaid;
+
     /** Transaction hash of the Allow List Add tx. Set after the user joins the Allow List. */
     @Column(name = "allowlist_tx_hash", length = 64)
     private String allowListTxHash;
