@@ -41,6 +41,7 @@ keri:
     bran: 0ADF2TpptgqcDE5IQUF1H
     name: identity
     role: agent
+    registry-name: kyc-registry
   schema:
     base-url: https://cred-issuance.demo.idw-sandboxes.cf-deployments.org/oobi/
     schemas:

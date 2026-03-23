@@ -265,6 +265,13 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
   const [status, setStatus] = useState<{ type: string; msg: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+
+  // "I don't have a credential" form
+  const [showIssueForm, setShowIssueForm] = useState(false)
+  const [issueForm, setIssueForm] = useState({ firstName: '', lastName: '', email: '' })
+  const [issueStatus, setIssueStatus] = useState<{ type: string; msg: string } | null>(null)
+  const [issueBusy, setIssueBusy] = useState(false)
+
   const sessionId = getSessionId()
 
   useEffect(() => {
@@ -312,12 +319,40 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
     }
   }
 
+  async function issueCredential() {
+    const { firstName, lastName, email } = issueForm
+    if (!firstName.trim() || !lastName.trim() || !email.trim()) {
+      setIssueStatus({ type: 'err', msg: 'All fields are required.' })
+      return
+    }
+    setIssueBusy(true)
+    setIssueStatus({ type: 'info', msg: 'Issuing credential…' })
+    try {
+      const res = await apiPost(
+        '/api/keri/credential/issue',
+        { firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim() },
+        { headers: { 'X-Session-Id': sessionId } }
+      )
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      await res.json()
+      setIssueStatus({ type: 'ok', msg: 'Credential issued! Please now present it using the button above to confirm receipt.' })
+      setShowIssueForm(false)
+      setIssueBusy(false)
+    } catch (e) {
+      setIssueStatus({ type: 'err', msg: `${e instanceof Error ? e.message : String(e)}` })
+      setIssueBusy(false)
+    }
+  }
+
   return (
     <div className="card">
       <p className="card-title">Present KYC Credential</p>
       <p className="card-subtitle">
-        Select the role for which you want to present a credential,
-        then approve the presentation in your wallet.
+        This step requires a KERI credential in your wallet. Select the credential type below
+        and approve the presentation when prompted.
       </p>
 
       {loadErr && <p className="status err">Failed to load available roles: {loadErr}</p>}
@@ -377,6 +412,67 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
           </button>
         )}
       </div>
+
+      {/* ── I don't have a credential ─────────────────────────────────────── */}
+      <div className="divider" style={{ margin: '1.5rem 0 1rem' }}>or</div>
+
+      <button
+        className="btn-icon"
+        style={{ fontWeight: 600, marginBottom: showIssueForm ? '.75rem' : 0 }}
+        onClick={() => setShowIssueForm(v => !v)}
+        disabled={busy}
+      >
+        {showIssueForm ? '▲ I don\'t have a credential' : '▼ I don\'t have a credential'}
+      </button>
+
+      {showIssueForm && (
+        <div style={{ background: 'var(--surface-2,#f0f4f8)', borderRadius: 8, padding: '1rem' }}>
+          <p style={{ margin: '0 0 .75rem', fontSize: '.9rem', opacity: .75 }}>
+            Provide your details below and a basic User credential will be issued to your KERI wallet.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '.5rem' }}>
+            <input
+              className="paste-area"
+              style={{ height: 'auto', padding: '.45rem .6rem', fontSize: '.95rem' }}
+              placeholder="First name"
+              value={issueForm.firstName}
+              onChange={e => setIssueForm(f => ({ ...f, firstName: e.target.value }))}
+              disabled={issueBusy}
+            />
+            <input
+              className="paste-area"
+              style={{ height: 'auto', padding: '.45rem .6rem', fontSize: '.95rem' }}
+              placeholder="Last name"
+              value={issueForm.lastName}
+              onChange={e => setIssueForm(f => ({ ...f, lastName: e.target.value }))}
+              disabled={issueBusy}
+            />
+            <input
+              className="paste-area"
+              style={{ height: 'auto', padding: '.45rem .6rem', fontSize: '.95rem' }}
+              placeholder="Email address"
+              type="email"
+              value={issueForm.email}
+              onChange={e => setIssueForm(f => ({ ...f, email: e.target.value }))}
+              disabled={issueBusy}
+            />
+          </div>
+          <button
+            className="btn-primary"
+            style={{ marginTop: '.75rem' }}
+            onClick={issueCredential}
+            disabled={issueBusy}
+          >
+            {issueBusy ? 'Issuing…' : 'Issue User Credential →'}
+          </button>
+        </div>
+      )}
+
+      {issueStatus && (
+        <p className={`status ${issueStatus.type}`} style={{ marginTop: '.5rem' }}>
+          {issueStatus.msg}
+        </p>
+      )}
     </div>
   )
 }
