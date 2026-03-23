@@ -337,9 +337,10 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
         const body = await res.json().catch(() => ({})) as { error?: string }
         throw new Error(body.error ?? `HTTP ${res.status}`)
       }
-      const raw = await res.json() as { role: string; roleValue: number; label: string; attributes: Record<string, unknown> }
-      setIssueStatus({ type: 'ok', msg: 'Credential issued successfully.' })
-      setTimeout(() => onNext(raw), 900)
+      await res.json()
+      setIssueStatus({ type: 'ok', msg: 'Credential issued! Please now present it using the button above to confirm receipt.' })
+      setShowIssueForm(false)
+      setIssueBusy(false)
     } catch (e) {
       setIssueStatus({ type: 'err', msg: `${e instanceof Error ? e.message : String(e)}` })
       setIssueBusy(false)
@@ -464,12 +465,13 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
           >
             {issueBusy ? 'Issuing…' : 'Issue User Credential →'}
           </button>
-          {issueStatus && (
-            <p className={`status ${issueStatus.type}`} style={{ marginTop: '.5rem' }}>
-              {issueStatus.msg}
-            </p>
-          )}
         </div>
+      )}
+
+      {issueStatus && (
+        <p className={`status ${issueStatus.type}`} style={{ marginTop: '.5rem' }}>
+          {issueStatus.msg}
+        </p>
       )}
     </div>
   )

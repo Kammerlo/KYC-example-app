@@ -37,7 +37,11 @@ import org.cardanofoundation.signify.app.credentialing.ipex.IpexApplyArgs;
 import org.cardanofoundation.signify.app.credentialing.ipex.IpexGrantArgs;
 import org.cardanofoundation.signify.app.credentialing.registries.CreateRegistryArgs;
 import org.cardanofoundation.signify.app.credentialing.registries.RegistryResult;
+import org.cardanofoundation.signify.cesr.Serder;
+import org.cardanofoundation.signify.cesr.exceptions.LibsodiumException;
 import org.cardanofoundation.signify.cesr.util.CESRStreamUtil;
+import org.cardanofoundation.signify.cesr.util.Utils;
+import org.cardanofoundation.signify.core.States;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -51,13 +55,13 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.net.URI;
+import java.security.DigestException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -455,8 +459,8 @@ public class KeriController {
 
     /**
      * Issues a USER credential directly to the wallet's AID for users who don't have one.
-     * Issues the ACDC on the KERI agent, grants it via IPEX, stores it in the KYC record,
-     * and returns a CredentialResponse so the frontend can proceed to step 4.
+     * Issues the ACDC on the KERI agent, grants it via IPEX, and stores it in the KYC record.
+     * The frontend will prompt the user to present the credential afterwards to confirm receipt.
      */
     @PostMapping("/credential/issue")
     public ResponseEntity<?> issueCredential(
@@ -504,7 +508,6 @@ public class KeriController {
                 .build();
 
         CredentialData credentialData = CredentialData.builder()
-                .i(identifierConfig.getPrefix())
                 .ri(registrySaid)
                 .s(schemaEntry.getSaid())
                 .a(subject)
@@ -512,26 +515,42 @@ public class KeriController {
 
         // Issue the ACDC on the KERI agent
         IssueCredentialResult issueResult = client.credentials().issue(identifierName, credentialData);
-        client.operations().wait(issueResult.getOp());
+        client.operations().wait(Operation.fromObject(issueResult.getOp()));
 
         String credentialSaid = issueResult.getAcdc().getKed().get("d").toString();
         log.info("Issued credential SAID={} for session={}", credentialSaid, sessionId);
+
+        // Retrieve the credential from the store to get ancatc for the IPEX grant attachment
+        @SuppressWarnings("unchecked")
+        LinkedHashMap<String, Object> credentialMap = (LinkedHashMap<String, Object>)
+                client.credentials().get(credentialSaid, false)
+                        .orElseThrow(() -> new IllegalStateException("Issued credential not found in store: " + credentialSaid));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sad = (Map<String, Object>) credentialMap.get("sad");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> anc = (Map<String, Object>) credentialMap.get("anc");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> iss = (Map<String, Object>) credentialMap.get("iss");
+        @SuppressWarnings("unchecked")
+        List<String> ancatc = (List<String>) credentialMap.get("ancatc");
+        String ancAttachment = (ancatc != null && !ancatc.isEmpty()) ? ancatc.get(0) : null;
 
         // Grant the credential to the wallet via IPEX
         IpexGrantArgs grantArgs = IpexGrantArgs.builder()
                 .senderName(identifierName)
                 .recipient(walletAid)
-                .message("")
                 .datetime(KERI_DATETIME.format(LocalDateTime.now(ZoneOffset.UTC)))
-                .acdc(issueResult.getAcdc())
-                .iss(issueResult.getIss())
-                .anc(issueResult.getAnc())
+                .acdc(new Serder(sad))
+                .iss(new Serder(iss))
+                .anc(new Serder(anc))
+                .ancAttachment(ancAttachment)
                 .build();
-        Exchanging.ExchangeMessageResult grantResult = client.ipex().grant(grantArgs);
+        Exchanging.ExchangeMessageResult grantResult = grant(client, grantArgs, schemaConfig.getBaseUrl(), schemaEntry.getSaid());
         Object grantOp = client.ipex().submitGrant(identifierName, grantResult.exn(),
                 grantResult.sigs(), grantResult.atc(), Collections.singletonList(walletAid));
         client.operations().wait(Operation.fromObject(grantOp));
 
+        log.info("IPEX grant submitted. Credential ID: " + credentialSaid);
         // Persist credential to the KYC record (same pattern as presentCredential)
         try {
             kycEntity.setCredentialAid(credentialSaid);
@@ -545,6 +564,43 @@ public class KeriController {
 
         return ResponseEntity.ok(new CredentialResponse(role.name(), role.getValue(),
                 schemaEntry.getLabel(), additionalProps));
+    }
+
+    private Exchanging.ExchangeMessageResult grant(SignifyClient client, IpexGrantArgs args, String schemaUrl, String schemaSAID) throws InterruptedException, DigestException, IOException, LibsodiumException {
+        States.HabState hab = client.identifiers().get(args.getSenderName())
+                .orElseThrow(() -> new IllegalArgumentException("Identifier not found: " + args.getSenderName()));
+
+        if (args.getAncAttachment() == null) {
+            throw new IllegalStateException("ancatc is missing from credential — was the issuance operation fully confirmed?");
+        }
+
+        // acdc attachment = serialized ISS event; iss attachment = serialized ANC event
+        String acdcAtc = new String(Utils.serializeACDCAttachment(args.getIss()));
+        String issAtc  = new String(Utils.serializeIssExnAttachment(args.getAnc()));
+        String ancAtc  = args.getAncAttachment();
+
+        Map<String, List<Object>> embeds = new LinkedHashMap<>();
+        embeds.put("acdc", Arrays.asList(args.getAcdc(), acdcAtc));
+        embeds.put("iss",  Arrays.asList(args.getIss(),  issAtc));
+        embeds.put("anc",  Arrays.asList(args.getAnc(),  ancAtc));
+
+        Map<String, Object> data = Map.of(
+                "m", args.getMessage() != null ? args.getMessage() : "",
+                "a", Map.of("oobiUrl", schemaUrl),
+                "s", schemaSAID
+        );
+
+        return client
+                .exchanges()
+                .createExchangeMessage(
+                        hab,
+                        "/ipex/grant",
+                        data,
+                        embeds,
+                        args.getRecipient(),
+                        args.getDatetime(),
+                        args.getAgreeSaid()
+                );
     }
 
     /** Returns the SAID of the first credential registry for this identifier, creating one if needed. */
@@ -584,6 +640,7 @@ public class KeriController {
             return ResponseEntity.badRequest().body(
                     Map.of("error", "No Cardano address on record — please connect your wallet first"));
         }
+
         int role = kyc.getCredentialRole() != null ? kyc.getCredentialRole() : 0;
         try {
             MetadataMap cip170Metadata = buildCip170Metadata(kyc, client);
