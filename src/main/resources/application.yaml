@@ -71,8 +71,8 @@ store:
     host: ${STORE_CARDANO_HOST:preview-node.play.dev.cardano.org}
     port: ${STORE_CARDANO_PORT:3001}
     protocol-magic: 2
-    sync-start-slot: 107340013
-    sync-start-blockhash: d07edc13515019f7a3f95fe05749cb8eecbcdfc0e76418059ca3d4dc38893ef0
+    sync-start-slot: 107765844
+    sync-start-blockhash: 288da6de27a405193f6f467f572e65500c0fd5b4b0dfa2ac6e5fe4d270499044
 #    protocol-magic: 42
 #    # for devnet we must specify the genesis files for Yaci-Store
 #    byron-genesis-file: classpath:/devkit/byron-genesis.json

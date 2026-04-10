@@ -77,7 +77,7 @@ pub type WLRedeemer {
   /// Tear down an empty list.
   WLDeinit
   /// Add user to the whitelist.
-  /// Requirements:
+  /// Requirements:±
   ///   1. Tx is signed by `new_pkh` (user self-registers)
   ///   2. `entity_endorsement` is the 64-byte Ed25519 signature of `new_pkh` bytes
   ///      produced off-chain by the trusted entity's private key.
