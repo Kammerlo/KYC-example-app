@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { type ConnectedWallet, signTx } from '../wallet'
+import { type ConnectedWallet, signTx, getFundedAddress } from '../wallet'
 import { apiGet, apiPost } from '../api'
 import CopyButton from './CopyButton'
 
@@ -111,7 +111,8 @@ function TelStatusCard({ status, wallet, onInitialised }: {
     setBusy(true)
     setOpStatus({ type: 'info', msg: 'Building TEL Init transaction…' })
     try {
-      const buildRes = await apiPost('/api/tel/build-init', { issuerAddress: wallet.changeAddress })
+      const fundedAddr = await getFundedAddress(wallet)
+      const buildRes = await apiPost('/api/tel/build-init', { issuerAddress: fundedAddr })
       const buildData = await buildRes.json()
       if (!buildRes.ok) throw new Error(buildData.error ?? `HTTP ${buildRes.status}`)
 
@@ -202,9 +203,10 @@ function TelMembersList({ members, loading, wallet, walletPkh, onRefresh, onMemb
     setRemovingVkey(node.vkey)
     setRemoveStatus(s => ({ ...s, [node.vkey]: { type: 'info', msg: 'Building remove transaction…' } }))
     try {
+      const fundedAddr = await getFundedAddress(wallet)
       const buildRes = await apiPost('/api/tel/build-remove', {
         entityVkeyHex: node.vkey,
-        issuerAddress: wallet.changeAddress,
+        issuerAddress: fundedAddr,
       })
       const buildData = await buildRes.json()
       if (!buildRes.ok) throw new Error(buildData.error ?? `HTTP ${buildRes.status}`)
@@ -368,10 +370,11 @@ function AddEntityCard({ wallet, onAdded }: {
     setBusy(true)
     setOpStatus({ type: 'info', msg: 'Building TEL Add transaction…' })
     try {
+      const fundedAddr = await getFundedAddress(wallet)
       const buildRes = await apiPost('/api/tel/build-add', {
         entityVkeyHex: vkey,
         role,
-        issuerAddress: wallet.changeAddress,
+        issuerAddress: fundedAddr,
       })
       const buildData = await buildRes.json()
       if (!buildRes.ok) throw new Error(buildData.error ?? `HTTP ${buildRes.status}`)

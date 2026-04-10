@@ -44,7 +44,23 @@ public class KYCEntity {
     @Column(name = "credential_said")
     private String credentialSaid;
 
-    /** Transaction hash of the Allow List Add tx. Set after the user joins the Allow List. */
-    @Column(name = "allowlist_tx_hash", length = 64)
-    private String allowListTxHash;
+    /** Hex-encoded 37-byte signed payload: user_pkh(28) || role(1) || valid_until(8). */
+    @Column(name = "kyc_proof_payload", length = 74)
+    private String kycProofPayload;
+
+    /** Hex-encoded 64-byte Ed25519 signature over the payload. */
+    @Column(name = "kyc_proof_signature", length = 128)
+    private String kycProofSignature;
+
+    /** Hex-encoded 32-byte Ed25519 verification key of the signing entity. */
+    @Column(name = "kyc_proof_entity_vkey", length = 64)
+    private String kycProofEntityVkey;
+
+    /** TEL UTxO reference of the signing entity (txHash#index). */
+    @Column(name = "kyc_proof_tel_utxo_ref", length = 128)
+    private String kycProofTelUtxoRef;
+
+    /** Valid-until timestamp in POSIX milliseconds. */
+    @Column(name = "kyc_proof_valid_until")
+    private Long kycProofValidUntil;
 }

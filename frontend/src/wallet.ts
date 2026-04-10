@@ -51,6 +51,24 @@ export async function submitTx(wallet: ConnectedWallet, signedTxHex: string): Pr
 }
 
 /**
+ * Returns the best address to use as a fee payer / UTxO source.
+ * Prefers a used address (which is known to have had transactions) over the
+ * change address (which may be a fresh derivation that Blockfrost doesn't know about).
+ * Falls back to the change address if no used addresses exist.
+ */
+export async function getFundedAddress(wallet: ConnectedWallet): Promise<string> {
+  try {
+    const used = await wallet.api.getUsedAddresses()
+    if (used && used.length > 0) {
+      return decodeCborAddress(used[0])
+    }
+  } catch {
+    // Some wallets may not support getUsedAddresses — fall through
+  }
+  return wallet.changeAddress
+}
+
+/**
  * Decode a CBOR-encoded address to bech32.
  * CIP-30 returns addresses as CBOR-encoded byte strings (e.g. 5839...).
  * We strip the CBOR header bytes and convert the raw address bytes to bech32.

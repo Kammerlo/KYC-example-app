@@ -1,5 +1,5 @@
 use aiken/crypto.{Blake2b_224, Hash, VerificationKey}
-use cardano/assets.{PolicyId, Value}
+use cardano/assets.{Value}
 use cardano/transaction.{OutputReference}
 
 /// Cardano payment key hash
@@ -57,63 +57,12 @@ pub type TERedeemer {
   TERemove { remove_vkey: ByteArray, covering_node: TENode }
 }
 
-// ── KYC Whitelist ─────────────────────────────────────────────────────────────
-
-/// Node datum for the KYC Whitelist.
-pub type WLNode {
-  /// The user's payment key hash (sort key)
-  pkh: PubKeyHash,
-  /// Whether this user is currently allowed to transact
-  active: Bool,
-  /// Trust level assigned to this user
-  role: Role,
-  next: NodeKey,
-}
-
-/// Redeemer for the KYC Whitelist validator
-pub type WLRedeemer {
-  /// Initialise the list.  Tx must be signed by a key present in the TEL.
-  WLInit
-  /// Tear down an empty list.
-  WLDeinit
-  /// Add user to the whitelist.
-  /// Requirements:±
-  ///   1. Tx is signed by `new_pkh` (user self-registers)
-  ///   2. `entity_endorsement` is the 64-byte Ed25519 signature of `new_pkh` bytes
-  ///      produced off-chain by the trusted entity's private key.
-  ///   3. `endorsing_entity_vkey` is the corresponding 32-byte raw Ed25519 public key.
-  ///      Its blake2b_224 hash must match a TEL member visible in reference inputs.
-  ///   4. `new_role` must be ≤ the endorsing entity's role in the TEL (enforced by `role_lte`).
-  ///
-  /// This allows the trusted entity to sign off-chain and hand the user a
-  /// "credential" they can use to add themselves without any further co-operation.
-  WLAdd {
-    new_pkh: PubKeyHash,
-    /// Role to assign to the new user
-    new_role: Role,
-    covering_node: WLNode,
-    /// Raw 32-byte Ed25519 verification key of the trusted entity
-    endorsing_entity_vkey: ByteArray,
-    /// 64-byte Ed25519 signature of `new_pkh` bytes by the trusted entity
-    entity_endorsement: ByteArray,
-  }
-  /// Set the active flag on an existing node.
-  /// Only a trusted entity (present in TEL reference inputs) may do this.
-  WLSetActive { target_pkh: PubKeyHash, new_active: Bool }
-}
-
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 /// Value + TE node pair (for internal passing)
 pub type TENodePair {
   val: Value,
   node: TENode,
-}
-
-/// Value + WL node pair
-pub type WLNodePair {
-  val: Value,
-  node: WLNode,
 }
 
 /// Config for the Trusted Entity List validator.
@@ -124,9 +73,15 @@ pub type TEConfig {
   oref: OutputReference,
 }
 
-/// Config for the KYC Whitelist validator.
-/// The `oref` is consumed exactly once in WLInit – prevents duplicate whitelists.
-pub type WLConfig {
-  te_policy_id: PolicyId,
-  oref: OutputReference,
-}
+// ── Off-chain KYC Proof ──────────────────────────────────────────────────────
+//
+// After KYC credential verification, the trusted entity signs a 37-byte payload:
+//
+//   user_pkh (28 bytes) || role (1 byte) || valid_until (8 bytes, big-endian POSIX ms)
+//
+// Any on-chain validator can verify this proof using:
+//   verify_ed25519_signature(entity_vkey, payload, signature)
+// where `entity_vkey` is the 32-byte Ed25519 key stored in a TEL node.
+//
+// The `valid_until` field uses Cardano's POSIXTime (milliseconds since epoch)
+// and can be checked against the transaction validity range.

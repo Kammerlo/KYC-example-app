@@ -7,7 +7,7 @@ export default function EntityView() {
       </div>
       <p className="card-subtitle" style={{ marginTop: '.5rem' }}>
         Your wallet is registered as a Trusted Entity in the TEL.
-        Whitelist management is coming soon.
+        KYC proofs are signed automatically when users complete verification.
       </p>
     </div>
   )

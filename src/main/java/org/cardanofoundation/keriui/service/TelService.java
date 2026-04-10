@@ -465,10 +465,19 @@ public class TelService {
     }
 
     private Utxo pickBootUtxo(BackendService backend, String address) throws Exception {
-        var page = backend.getUtxoService().getUtxos(address, 10, 1);
-        if (page.isSuccessful() && page.getValue() != null && !page.getValue().isEmpty())
+        log.info("pickBootUtxo: looking for UTxOs at {}", address);
+        var page = backend.getUtxoService().getUtxos(address, 100, 1);
+        if (page.isSuccessful() && page.getValue() != null && !page.getValue().isEmpty()) {
+            log.info("pickBootUtxo: found {} UTxOs at {}", page.getValue().size(), address);
             return page.getValue().get(0);
-        throw new RuntimeException("No UTxOs at " + address);
+        }
+        log.warn("pickBootUtxo: Blockfrost returned code={} for address={} — " +
+                        "this often means the address has never appeared in a transaction. " +
+                        "Ensure the frontend sends a used address (not a fresh change address).",
+                page.code(), address);
+        throw new RuntimeException("No UTxOs found at " + address
+                + " (HTTP " + page.code() + "). The wallet may be sending a fresh change address "
+                + "that Blockfrost doesn't know about. Try using a different address with funds.");
     }
 
     // ── Datum helpers ─────────────────────────────────────────────────────────

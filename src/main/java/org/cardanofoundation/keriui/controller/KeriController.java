@@ -2,9 +2,6 @@ package org.cardanofoundation.keriui.controller;
 
 import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.common.model.Networks;
-import com.bloxbean.cardano.client.metadata.MetadataBuilder;
-import com.bloxbean.cardano.client.metadata.MetadataList;
-import com.bloxbean.cardano.client.metadata.MetadataMap;
 import com.bloxbean.cardano.client.util.HexUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,7 +20,7 @@ import org.cardanofoundation.keriui.domain.dto.SchemaListResponse;
 import org.cardanofoundation.keriui.domain.dto.SessionResponse;
 import org.cardanofoundation.keriui.domain.entity.KYCEntity;
 import org.cardanofoundation.keriui.domain.repository.KycRepository;
-import org.cardanofoundation.keriui.service.AllowListService;
+import org.cardanofoundation.keriui.service.KycProofService;
 import org.cardanofoundation.keriui.service.TelService;
 import org.cardanofoundation.keriui.util.IpexNotificationHelper;
 import org.cardanofoundation.signify.app.Exchanging;
@@ -39,7 +36,6 @@ import org.cardanofoundation.signify.app.credentialing.registries.CreateRegistry
 import org.cardanofoundation.signify.app.credentialing.registries.RegistryResult;
 import org.cardanofoundation.signify.cesr.Serder;
 import org.cardanofoundation.signify.cesr.exceptions.LibsodiumException;
-import org.cardanofoundation.signify.cesr.util.CESRStreamUtil;
 import org.cardanofoundation.signify.cesr.util.Utils;
 import org.cardanofoundation.signify.core.States;
 import org.springframework.beans.factory.annotation.Value;
@@ -80,7 +76,7 @@ public class KeriController {
     private final IdentifierConfig identifierConfig;
     private final SignifyClient client;
     private final KycRepository kycRepository;
-    private final AllowListService allowListService;
+    private final KycProofService kycProofService;
     private final TelService telService;
     private final SchemaConfig schemaConfig;
     private final ObjectMapper objectMapper;
@@ -411,8 +407,15 @@ public class KeriController {
         if (hasCardanoAddress) {
             builder.cardanoAddress(kyc.getCardanoAddress());
         }
-        if (kyc.getAllowListTxHash() != null) {
-            builder.allowListTxHash(kyc.getAllowListTxHash());
+        if (kyc.getKycProofPayload() != null) {
+            builder.kycProofPayload(kyc.getKycProofPayload())
+                    .kycProofSignature(kyc.getKycProofSignature())
+                    .kycProofEntityVkey(kyc.getKycProofEntityVkey())
+                    .kycProofTelUtxoRef(kyc.getKycProofTelUtxoRef())
+                    .kycProofValidUntil(kyc.getKycProofValidUntil())
+                    .kycProofValidUntilHuman(kyc.getKycProofValidUntil() != null
+                            ? java.time.Instant.ofEpochMilli(kyc.getKycProofValidUntil()).toString()
+                            : null);
         }
         return ResponseEntity.ok(builder.build());
     }
@@ -435,25 +438,6 @@ public class KeriController {
         log.info("Stored Cardano address for session={}: {}…",
                 sessionId, cardanoAddress.substring(0, Math.min(20, cardanoAddress.length())));
 
-        return ResponseEntity.ok(Map.of("ok", true));
-    }
-
-    /** Persists the Allow List transaction hash after the user has successfully joined. */
-    @PostMapping("/session/allowlist-tx")
-    public ResponseEntity<?> storeAllowListTxHash(
-            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
-            @RequestBody Map<String, String> body) {
-        if (sessionId == null || !kycRepository.existsById(sessionId)) {
-            return ResponseEntity.status(401).body(Map.of("error", "Unknown session"));
-        }
-        String txHash = body.get("txHash");
-        if (txHash == null || txHash.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "txHash is required"));
-        }
-        KYCEntity kyc = kycRepository.findById(sessionId).get();
-        kyc.setAllowListTxHash(txHash);
-        kycRepository.save(kyc);
-        log.info("Stored Allow List tx hash for session={}: {}", sessionId, txHash);
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -625,11 +609,11 @@ public class KeriController {
     }
 
     /**
-     * Builds an unsigned WL Add transaction using the Cardano address stored for this session.
-     * The signing entity endorses the user's PKH off-chain; the role comes from the presented credential.
+     * Generates a signed KYC proof for the user's Cardano address.
+     * The signing entity signs: user_pkh(28) || role(1) || valid_until(8).
      */
-    @PostMapping("/allowlist/build-add-tx")
-    public ResponseEntity<?> buildAllowListAddTx(
+    @PostMapping("/kyc-proof/generate")
+    public ResponseEntity<?> generateKycProof(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (sessionId == null || !kycRepository.existsById(sessionId)) {
             return ResponseEntity.status(401).body(Map.of("error", "Unknown session"));
@@ -640,135 +624,31 @@ public class KeriController {
             return ResponseEntity.badRequest().body(
                     Map.of("error", "No Cardano address on record — please connect your wallet first"));
         }
+        if (kyc.getCredentialRole() == null) {
+            return ResponseEntity.badRequest().body(
+                    Map.of("error", "No credential on record — please present a credential first"));
+        }
 
-        int role = kyc.getCredentialRole() != null ? kyc.getCredentialRole() : 0;
+        int role = kyc.getCredentialRole();
         try {
-            MetadataMap cip170Metadata = buildCip170Metadata(kyc, client);
-            String txCbor = allowListService.buildAddTxWithEndorsement(userAddress, signingMnemonic, role, cip170Metadata);
-            return ResponseEntity.ok(Map.of("txCbor", txCbor));
+            var proof = kycProofService.generateProof(userAddress, role);
+
+            // Persist to session
+            kyc.setKycProofPayload(proof.payloadHex());
+            kyc.setKycProofSignature(proof.signatureHex());
+            kyc.setKycProofEntityVkey(proof.entityVkeyHex());
+            kyc.setKycProofTelUtxoRef(proof.entityTelUtxoRef());
+            kyc.setKycProofValidUntil(proof.validUntilPosixMs());
+            kycRepository.save(kyc);
+
+            log.info("Generated KYC proof for session={}: payload={}", sessionId, proof.payloadHex());
+            return ResponseEntity.ok(proof);
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            log.error("allowlist build-add-tx failed", e);
+            log.error("kyc-proof/generate failed", e);
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
-    }
-
-    private MetadataMap buildCip170Metadata(KYCEntity entity, SignifyClient client) {
-        MetadataMap metadata = MetadataBuilder.createMap();
-        metadata.put("t", "AUTH_BEGIN");
-        metadata.put("i", entity.getAid());
-        MetadataMap versionMap = MetadataBuilder.createMap();
-        versionMap.put("v", "1.0");
-        versionMap.put("a", "ACDC10");
-        versionMap.put("k", "KERI10");
-        metadata.put("v", versionMap);
-        metadata.put("s", entity.getCredentialSaid());
-        //        metadata.put("m", ""); // Optional field
-        String s = waitForCredential(client, entity.getCredentialAid()).orElseThrow(() -> new IllegalStateException("Credential not found with ID: " + entity.getCredentialAid()));
-        List<Map<String, Object>> cesrData = CESRStreamUtil.parseCESRData(s);
-        String stripped = striptCesrData(cesrData);
-        byte[][] chunks = splitIntoChunks(stripped.getBytes(), 64);
-        MetadataList credentialChunks = MetadataBuilder.createList();
-        for (byte[] chunk : chunks) {
-            credentialChunks.add(chunk);
-        }
-        metadata.put("c", credentialChunks);
-        return metadata;
-    }
-
-    private static byte[][] splitIntoChunks(byte[] data, int chunkSize) {
-        int numChunks = (data.length + chunkSize - 1) / chunkSize;
-        byte[][] chunks = new byte[numChunks][];
-
-        for (int i = 0; i < numChunks; i++) {
-            int start = i * chunkSize;
-            int end = Math.min(start + chunkSize, data.length);
-            chunks[i] = Arrays.copyOfRange(data, start, end);
-        }
-
-        return chunks;
-    }
-
-    private String striptCesrData(List<Map<String, Object>> cesrData) {
-        List<Map<String, Object>> allVcpEvents = new ArrayList<>();
-        List<String> allVcpAttachments = new ArrayList<>();
-        List<Map<String, Object>> allIssEvents = new ArrayList<>();
-        List<String> allIssAttachments = new ArrayList<>();
-        List<Map<String, Object>> allAcdcEvents = new ArrayList<>();
-        List<String> allAcdcAttachments = new ArrayList<>();
-
-        for (Map<String, Object> eventData : cesrData) {
-            Map<String, Object> event = (Map<String, Object>) eventData.get("event");
-
-            // Check for event type
-            Object eventTypeObj = event.get("t");
-            if (eventTypeObj != null) {
-                String eventType = eventTypeObj.toString();
-                switch (eventType) {
-                    case "vcp":
-                        allVcpEvents.add(event);
-                        allVcpAttachments.add((String) eventData.get("atc"));
-                        break;
-                    case "iss":
-                        allIssEvents.add(event);
-                        allIssAttachments.add((String) eventData.get("atc"));
-                        break;
-                }
-            } else {
-                // Check if this is an ACDC (credential data) without "t" field
-                if (event.containsKey("s") && event.containsKey("a") && event.containsKey("i")) {
-                    Object schemaObj = event.get("s");
-                    if (schemaObj != null) {
-                        allAcdcEvents.add(event);
-                        allAcdcAttachments.add("");
-                    }
-                }
-            }
-        }
-
-        List<Map<String, Object>> combinedEvents = new ArrayList<>();
-        List<String> combinedAttachments = new ArrayList<>();
-
-        combinedEvents.addAll(allVcpEvents);
-        combinedEvents.addAll(allIssEvents);
-        combinedEvents.addAll(allAcdcEvents);
-
-        combinedAttachments.addAll(allVcpAttachments);
-        combinedAttachments.addAll(allIssAttachments);
-        combinedAttachments.addAll(allAcdcAttachments);
-
-        return CESRStreamUtil.makeCESRStream(combinedEvents, combinedAttachments);
-    }
-
-    private Optional<String> waitForCredential(SignifyClient client, String credentialId) {
-        int maxAttempts = 10;
-        int waitTimeMs = 2000;
-
-        log.info("Waiting for credential to be available in store...");
-
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-                Optional<String> credential = client.credentials().get(credentialId);
-                if (credential.isPresent()) {
-                    log.info("Credential retrieved successfully!");
-                    return credential;
-                }
-            } catch (Exception e) {
-                log.info("Attempt " + attempt + " failed: " + e.getMessage());
-            }
-
-            if (attempt < maxAttempts) {
-                log.info("Credential not yet available, waiting... (attempt " + attempt + "/" + maxAttempts + ")");
-                try {
-                    Thread.sleep(waitTimeMs);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-            }
-        }
-
-        return Optional.empty();
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

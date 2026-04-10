@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import QRCode from 'qrcode'
 import jsQR from 'jsqr'
 import { apiGet, apiPost } from '../api'
-import { getAvailableWallets, connectWalletByKey, type ConnectedWallet } from '../wallet'
+import { getFundedAddress, type ConnectedWallet } from '../wallet'
 import CopyButton from './CopyButton'
 
 type CredentialData = {
@@ -11,7 +11,19 @@ type CredentialData = {
   label: string
   attributes: Record<string, unknown>
 }
-type Step = 1 | 2 | 3 | 4 | 'done'
+
+type KycProof = {
+  payloadHex: string
+  signatureHex: string
+  entityVkeyHex: string
+  entityTelUtxoRef: string
+  validUntilPosixMs: number
+  validUntilHuman: string
+  role: number
+  roleName: string
+}
+
+type Step = 1 | 2 | 3 | 'done'
 
 function camelToTitle(key: string): string {
   return key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim()
@@ -28,12 +40,11 @@ function getSessionId(): string {
   return id
 }
 
-export default function UserFlow() {
+export default function UserFlow({ wallet }: { wallet: ConnectedWallet }) {
   const [step, setStep] = useState<Step>(1)
   const [loading, setLoading] = useState(true)
   const [credential, setCredential] = useState<CredentialData | null>(null)
-  const [storedAddress, setStoredAddress] = useState<string | null>(null)
-  const [allowListTxHash, setAllowListTxHash] = useState<string | null>(null)
+  const [kycProof, setKycProof] = useState<KycProof | null>(null)
   const stopScanRef = useRef<(() => void) | null>(null)
 
   // On mount: restore session state — skip ahead based on how far the user got
@@ -44,7 +55,9 @@ export default function UserFlow() {
       .then((data: {
         exists: boolean; hasCredential: boolean; hasCardanoAddress: boolean;
         attributes?: Record<string, unknown>; credentialRole?: number; credentialRoleName?: string;
-        cardanoAddress?: string; allowListTxHash?: string
+        cardanoAddress?: string; kycProofPayload?: string; kycProofSignature?: string;
+        kycProofEntityVkey?: string; kycProofTelUtxoRef?: string;
+        kycProofValidUntil?: number; kycProofValidUntilHuman?: string
       }) => {
         if (data.hasCredential && data.attributes) {
           const roleValue = data.credentialRole ?? 0
@@ -54,16 +67,22 @@ export default function UserFlow() {
             label: ROLE_LABELS[roleValue] ?? 'User',
             attributes: data.attributes,
           })
-          if (data.allowListTxHash) {
-            // Already on the Allow List — jump straight to the done view
-            setAllowListTxHash(data.allowListTxHash)
+          if (data.kycProofPayload) {
+            setKycProof({
+              payloadHex: data.kycProofPayload,
+              signatureHex: data.kycProofSignature!,
+              entityVkeyHex: data.kycProofEntityVkey!,
+              entityTelUtxoRef: data.kycProofTelUtxoRef!,
+              validUntilPosixMs: data.kycProofValidUntil!,
+              validUntilHuman: data.kycProofValidUntilHuman!,
+              role: roleValue,
+              roleName: data.credentialRoleName ?? 'USER',
+            })
             setStep('done')
           } else {
-            setStep(4)
+            // Have credential but no proof — go to step 3 to auto-generate
+            setStep(3)
           }
-        }
-        if (data.hasCardanoAddress && data.cardanoAddress) {
-          setStoredAddress(data.cardanoAddress)
         }
       })
       .catch(() => { /* session missing or error — start from step 1 */ })
@@ -86,22 +105,17 @@ export default function UserFlow() {
         {step === 1 && <Step1 onNext={() => goto(2)} />}
         {step === 2 && <Step2 stopScanRef={stopScanRef} onNext={() => goto(3)} />}
         {step === 3 && (
-          <Step3 onNext={(data) => { setCredential(data); goto(4) }} />
-        )}
-        {step === 4 && (
-          <Step4
-            credential={credential!}
-            storedAddress={storedAddress}
-            onAddressStored={(addr) => setStoredAddress(addr)}
-            onNext={() => goto('done')}
-            onUpdateCredentials={() => { setCredential(null); goto(1) }}
+          <Step3
+            wallet={wallet}
+            existingCredential={credential}
+            onComplete={(data, proof) => { setCredential(data); setKycProof(proof); goto('done') }}
           />
         )}
         {step === 'done' && (
           <StepDone
             credential={credential}
-            allowListTxHash={allowListTxHash}
-            onRestart={() => { setCredential(null); setStoredAddress(null); setAllowListTxHash(null); goto(1) }}
+            kycProof={kycProof}
+            onRestart={() => { setCredential(null); setKycProof(null); goto(1) }}
           />
         )}
       </div>
@@ -110,7 +124,7 @@ export default function UserFlow() {
 }
 
 function StepperHeader({ step }: { step: Step }) {
-  const s = step === 'done' ? 5 : (step as number)
+  const s = step === 'done' ? 4 : (step as number)
   return (
     <div className="stepper-header">
       <div className={`step-pill ${s >= 1 ? (s > 1 ? 'done' : 'active') : ''}`}>
@@ -122,11 +136,7 @@ function StepperHeader({ step }: { step: Step }) {
       </div>
       <div className="step-connector" />
       <div className={`step-pill ${s >= 3 ? (s > 3 ? 'done' : 'active') : ''}`}>
-        {s > 3 ? '✓' : '3'} Present credential
-      </div>
-      <div className="step-connector" />
-      <div className={`step-pill ${s >= 4 ? (s > 4 ? 'done' : 'active') : ''}`}>
-        {s > 4 ? '✓' : '4'} Join Allow List
+        {s > 3 ? '✓' : '3'} Get KYC Proof
       </div>
     </div>
   )
@@ -258,7 +268,11 @@ function Step2({ stopScanRef, onNext }: {
 
 interface AvailableRole { role: string; roleValue: number; label: string }
 
-function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
+function Step3({ wallet, onComplete, existingCredential }: {
+  wallet: ConnectedWallet
+  onComplete: (data: CredentialData, proof: KycProof) => void
+  existingCredential: CredentialData | null
+}) {
   const [availableRoles, setAvailableRoles] = useState<AvailableRole[] | null>(null)
   const [selectedRole, setSelectedRole] = useState<string | null>(null)
   const [loadErr, setLoadErr] = useState<string | null>(null)
@@ -273,16 +287,54 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
   const [issueBusy, setIssueBusy] = useState(false)
 
   const sessionId = getSessionId()
+  const autoGenerateRef = useRef(false)
 
   useEffect(() => {
-    apiGet('/api/keri/available-roles')
-      .then(r => r.json())
-      .then((d: { availableRoles: AvailableRole[] }) => {
-        setAvailableRoles(d.availableRoles ?? [])
-        if (d.availableRoles?.length === 1) setSelectedRole(d.availableRoles[0].role)
-      })
-      .catch(e => setLoadErr((e as Error).message))
+    if (!existingCredential) {
+      apiGet('/api/keri/available-roles')
+        .then(r => r.json())
+        .then((d: { availableRoles: AvailableRole[] }) => {
+          setAvailableRoles(d.availableRoles ?? [])
+          if (d.availableRoles?.length === 1) setSelectedRole(d.availableRoles[0].role)
+        })
+        .catch(e => setLoadErr((e as Error).message))
+    }
   }, [])
+
+  // Auto-generate proof if we already have the credential (session restore)
+  useEffect(() => {
+    if (existingCredential && !autoGenerateRef.current) {
+      autoGenerateRef.current = true
+      setBusy(true)
+      generateProof(existingCredential)
+    }
+  }, [existingCredential])
+
+  async function generateProof(credData: CredentialData) {
+    setStatus({ type: 'info', msg: 'Generating KYC proof…' })
+    try {
+      // Ensure the wallet address is stored in the session before generating
+      const addr = await getFundedAddress(wallet)
+      await apiPost('/api/keri/session/cardano-address',
+        { cardanoAddress: addr },
+        { headers: { 'X-Session-Id': sessionId } }
+      )
+      const res = await fetch('/api/keri/kyc-proof/generate', {
+        method: 'POST',
+        headers: { 'X-Session-Id': sessionId },
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })) as { error?: string }
+        throw new Error(err.error ?? `HTTP ${res.status}`)
+      }
+      const proof = await res.json() as KycProof
+      setStatus({ type: 'ok', msg: 'KYC proof generated!' })
+      setTimeout(() => onComplete(credData, proof), 800)
+    } catch (e) {
+      setStatus({ type: 'err', msg: `Proof generation failed: ${e instanceof Error ? e.message : String(e)}` })
+      setBusy(false)
+    }
+  }
 
   async function present() {
     if (!selectedRole) return
@@ -300,7 +352,8 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
       }
       const raw = await res.json() as { role: string; roleValue: number; label: string; attributes: Record<string, unknown> }
       setStatus({ type: 'ok', msg: 'Presentation completed successfully.' })
-      setTimeout(() => onNext(raw), 900)
+      // Auto-generate proof after credential is verified
+      setTimeout(() => generateProof(raw), 900)
     } catch (e) {
       setStatus({ type: 'err', msg: `${e instanceof Error ? e.message : String(e)}` })
       setBusy(false)
@@ -347,12 +400,47 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
     }
   }
 
+  // Session restore: already have credential, auto-generating proof
+  if (existingCredential) {
+    return (
+      <div className="card">
+        <p className="card-title">Get KYC Proof</p>
+        <div style={{ background: 'var(--surface-2,#f0f4f8)', borderRadius: 8, padding: '1rem', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '.5rem' }}>
+            <span style={{ fontWeight: 600, fontSize: '.8rem', textTransform: 'uppercase', opacity: .55 }}>
+              KYC Credential
+            </span>
+            <span className={`te-role-badge te-role-${existingCredential.roleValue}`}>
+              {existingCredential.label || ROLE_LABELS[existingCredential.roleValue] || existingCredential.role}
+            </span>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.95rem' }}>
+            <tbody>
+              {Object.entries(existingCredential.attributes).map(([key, val]) => (
+                <tr key={key}>
+                  <td style={{ padding: '3px 0', opacity: .65, width: '36%' }}>{camelToTitle(key)}</td>
+                  <td style={{ padding: '3px 0', fontWeight: 500 }}>{val != null ? String(val) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {status && <p className={`status ${status.type}`}>{status.msg}</p>}
+        {!busy && status?.type === 'err' && (
+          <button className="btn-primary" onClick={() => { setBusy(true); generateProof(existingCredential) }}
+            style={{ marginTop: '.75rem' }}>
+            Retry →
+          </button>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="card">
-      <p className="card-title">Present KYC Credential</p>
+      <p className="card-title">Get KYC Proof</p>
       <p className="card-subtitle">
-        This step requires a KERI credential in your wallet. Select the credential type below
-        and approve the presentation when prompted.
+        Present your KYC credential and a signed proof will be generated automatically.
       </p>
 
       {loadErr && <p className="status err">Failed to load available roles: {loadErr}</p>}
@@ -477,208 +565,62 @@ function Step3({ onNext }: { onNext: (data: CredentialData) => void }) {
   )
 }
 
-function Step4({
-  credential, storedAddress, onAddressStored, onNext, onUpdateCredentials,
-}: {
-  credential: CredentialData
-  storedAddress: string | null
-  onAddressStored: (addr: string) => void
-  onNext: () => void
-  onUpdateCredentials: () => void
-}) {
-  const sessionId = getSessionId()
-  const [wallet, setWallet] = useState<ConnectedWallet | null>(null)
-  const [walletErr, setWalletErr] = useState<string | null>(null)
-  const [status, setStatus] = useState<{ type: string; msg: string } | null>(null)
-  const [txHash, setTxHash] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const availableWallets = getAvailableWallets()
-
-  async function connectWallet(key: string) {
-    setWalletErr(null)
-    try {
-      const w = await connectWalletByKey(key)
-      setWallet(w)
-      await apiPost('/api/keri/session/cardano-address',
-        { cardanoAddress: w.changeAddress },
-        { headers: { 'X-Session-Id': sessionId } }
-      )
-      onAddressStored(w.changeAddress)
-    } catch (e) {
-      setWalletErr(`Failed to connect: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
-
-  async function buildSignAndSubmit() {
-    if (!wallet) return
-    setBusy(true)
-    setTxHash(null)
-    try {
-      // Step 1: build
-      setStatus({ type: 'info', msg: 'Building transaction…' })
-      const buildRes = await fetch('/api/keri/allowlist/build-add-tx', {
-        method: 'POST',
-        headers: { 'X-Session-Id': sessionId },
-      })
-      if (!buildRes.ok) {
-        const err = await buildRes.json().catch(() => ({ error: `HTTP ${buildRes.status}` }))
-        throw new Error(err.error ?? `HTTP ${buildRes.status}`)
-      }
-      const { txCbor } = await buildRes.json() as { txCbor: string }
-
-      // Step 2: sign
-      setStatus({ type: 'info', msg: 'Waiting for wallet signature…' })
-      const witnessCbor = await wallet.api.signTx(txCbor, true)
-
-      // Step 3: submit
-      setStatus({ type: 'info', msg: 'Submitting transaction…' })
-      const submitRes = await apiPost('/api/allowlist/submit', { unsignedTxCbor: txCbor, witnessCbor })
-      if (!submitRes.ok) {
-        const err = await submitRes.json().catch(() => ({ error: `HTTP ${submitRes.status}` }))
-        throw new Error(err.error ?? `HTTP ${submitRes.status}`)
-      }
-      const { txHash: hash } = await submitRes.json() as { txHash: string }
-      setTxHash(hash)
-      setStatus({ type: 'ok', msg: 'Transaction submitted!' })
-      // Persist the tx hash to the session so it survives page reload
-      await apiPost('/api/keri/session/allowlist-tx',
-        { txHash: hash },
-        { headers: { 'X-Session-Id': sessionId } }
-      ).catch(() => { /* non-critical — state already in memory */ })
-      setTimeout(onNext, 1200)
-    } catch (e) {
-      setStatus({ type: 'err', msg: `${e instanceof Error ? e.message : String(e)}` })
-      setBusy(false)
-    }
-  }
-
-  const activeAddress = wallet?.changeAddress ?? storedAddress
+function KycProofDisplay({ proof }: { proof: KycProof }) {
+  const fields: { label: string; value: string; mono?: boolean }[] = [
+    { label: 'Payload (hex)', value: proof.payloadHex, mono: true },
+    { label: 'Signature (hex)', value: proof.signatureHex, mono: true },
+    { label: 'Entity VKey (hex)', value: proof.entityVkeyHex, mono: true },
+    { label: 'TEL UTxO Reference', value: proof.entityTelUtxoRef, mono: true },
+    { label: 'Valid Until', value: `${new Date(proof.validUntilPosixMs).toLocaleString()} (${proof.validUntilPosixMs} ms)` },
+    { label: 'Role', value: `${proof.roleName} (${proof.role})` },
+  ]
 
   return (
-    <div className="card">
-      <p className="card-title">Join the Allow List</p>
-
-      {/* KYC credential summary */}
-      <div style={{ background: 'var(--surface-2,#f0f4f8)', borderRadius: 8, padding: '1rem', marginBottom: '1.25rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-            <span style={{ fontWeight: 600, fontSize: '.8rem', textTransform: 'uppercase', opacity: .55 }}>
-              KYC Credential
-            </span>
-            <span className={`te-role-badge te-role-${credential.roleValue}`}>
-              {credential.label || ROLE_LABELS[credential.roleValue] || credential.role}
-            </span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '.75rem' }}>
+      {fields.map(f => (
+        <div key={f.label}>
+          <span style={{ fontWeight: 600, fontSize: '.8rem', textTransform: 'uppercase', opacity: .55, display: 'block', marginBottom: '.25rem' }}>
+            {f.label}
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem' }}>
+            <code style={{
+              fontSize: '.82rem',
+              wordBreak: 'break-all',
+              flex: 1,
+              ...(f.mono ? { fontFamily: 'var(--mono-font, monospace)' } : {}),
+            }}>
+              {f.value}
+            </code>
+            <CopyButton text={f.mono ? f.value : String(f.value)} />
           </div>
-          <button className="btn-icon" style={{ fontSize: '.8rem' }} onClick={onUpdateCredentials}>
-            Update credentials
-          </button>
         </div>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.95rem' }}>
-          <tbody>
-            {Object.entries(credential.attributes).map(([key, val]) => (
-              <tr key={key}>
-                <td style={{ padding: '3px 0', opacity: .65, width: '36%' }}>{camelToTitle(key)}</td>
-                <td style={{ padding: '3px 0', fontWeight: 500 }}>{val != null ? String(val) : '—'}</td>
-              </tr>
-            ))}
-            {Object.keys(credential.attributes).length === 0 && (
-              <tr><td colSpan={2} style={{ padding: '3px 0', opacity: .65 }}>No attributes available.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Cardano wallet section */}
-      {!wallet ? (
-        <div>
-          {storedAddress && (
-            <div className="status info" style={{ marginBottom: '.75rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', flexWrap: 'wrap', marginBottom: '.2rem' }}>
-                <span style={{ fontSize: '.85rem' }}>Registered address:</span>
-                <code style={{ fontSize: '.8rem' }}>{storedAddress.slice(0, 22)}…</code>
-                <CopyButton text={storedAddress} />
-              </div>
-              <span style={{ fontSize: '.83rem' }}>Connect your wallet to sign the transaction.</span>
-            </div>
-          )}
-          {!storedAddress && (
-            <p className="card-subtitle" style={{ marginBottom: '.75rem' }}>
-              Connect your Cardano wallet to sign the Allow List transaction.
-            </p>
-          )}
-          {availableWallets.length === 0 && (
-            <p className="status err">No Cardano wallet extension detected. Please install one and reload.</p>
-          )}
-          <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
-            {availableWallets.map(w => (
-              <button key={w.key} className="btn-primary"
-                style={{ display: 'flex', alignItems: 'center', gap: '.4rem' }}
-                onClick={() => connectWallet(w.key)}>
-                {w.icon && <img src={w.icon} alt="" style={{ width: 20, height: 20 }} />}
-                {w.name}
-              </button>
-            ))}
-          </div>
-          {walletErr && <p className="status err" style={{ marginTop: '.5rem' }}>{walletErr}</p>}
-        </div>
-      ) : (
-        <div>
-          <div className="status ok" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '.4rem', flexWrap: 'wrap' }}>
-            <span>✓ {wallet.name} connected</span>
-            {activeAddress && (
-              <>
-                <code style={{ fontSize: '.82rem' }}>{activeAddress.slice(0, 22)}…</code>
-                <CopyButton text={activeAddress} />
-              </>
-            )}
-          </div>
-
-          <button className="btn-primary" onClick={buildSignAndSubmit} disabled={busy}>
-            {busy ? 'Processing…' : 'Sign & Submit Transaction →'}
-          </button>
-
-          {status && (
-            <div className={`status ${status.type}`} style={{ marginTop: '.75rem' }}>
-              {status.msg}
-              {status.type === 'ok' && txHash && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '.35rem', marginTop: '.35rem' }}>
-                  <span style={{ fontSize: '.78rem', opacity: .7 }}>Tx:</span>
-                  <code style={{ fontSize: '.78rem' }}>{txHash.slice(0, 20)}…</code>
-                  <CopyButton text={txHash} />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      ))}
     </div>
   )
 }
 
-function StepDone({ credential, allowListTxHash, onRestart }: {
+function StepDone({ credential, kycProof, onRestart }: {
   credential: CredentialData | null
-  allowListTxHash: string | null
+  kycProof: KycProof | null
   onRestart: () => void
 }) {
   return (
     <div className="card">
-      <p className="card-title">Allow List Status</p>
+      <p className="card-title">KYC Proof</p>
 
       <div className="status ok" style={{ display: 'flex', alignItems: 'center', gap: '.5rem', marginBottom: '1.25rem' }}>
-        <span style={{ fontWeight: 600 }}>✓ You are on the Allow List</span>
+        <span style={{ fontWeight: 600 }}>✓ KYC proof generated</span>
       </div>
 
-      {/* Allow List tx hash */}
-      {allowListTxHash && (
-        <div style={{ marginBottom: '1.25rem' }}>
-          <span style={{ fontWeight: 600, fontSize: '.8rem', textTransform: 'uppercase', opacity: .55 }}>
-            Allow List Transaction
-          </span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem', marginTop: '.35rem' }}>
-            <code style={{ fontSize: '.85rem' }}>{allowListTxHash.slice(0, 20)}…{allowListTxHash.slice(-8)}</code>
-            <CopyButton text={allowListTxHash} />
-          </div>
+      <p className="card-subtitle" style={{ marginBottom: '1.25rem' }}>
+        Use the values below when building Cardano transactions that require KYC verification.
+        Include the TEL UTxO as a reference input and pass the payload + signature in the redeemer.
+      </p>
+
+      {/* KYC proof data */}
+      {kycProof && (
+        <div style={{ background: 'var(--surface-2,#f0f4f8)', borderRadius: 8, padding: '1rem', marginBottom: '1.25rem' }}>
+          <KycProofDisplay proof={kycProof} />
         </div>
       )}
 
@@ -712,4 +654,3 @@ function StepDone({ credential, allowListTxHash, onRestart }: {
     </div>
   )
 }
-

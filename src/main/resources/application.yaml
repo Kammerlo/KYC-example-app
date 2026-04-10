@@ -35,7 +35,7 @@ spring:
     validateMigrationNaming: true
 
 keri:
-  url:  http://localhost:3901 # https://keria.qa.reeve.cf-deployments.org
+  url: http://localhost:3901 # https://keria.qa.reeve.cf-deployments.org
   booturl: http://localhost:3903 # https://keria-boot.qa.reeve.cf-deployments.org
   identifier:
     bran: 0ADF2TpptgqcDE5IQUF1H
@@ -55,14 +55,15 @@ keri:
         said: ${KERI_SCHEMA_VLEI_SAID:ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY} # Legal Entity vLEI Credential
         label: "vLEI Credential"
   signing-mnemonic: ${KERI_SIGNING_MNEMONIC:nest wild farm beyond decide arm chuckle home raven card parrot nothing crazy casino hub broken scan height marine movie gloom village common off}
+  kyc-proof-validity-days: ${KYC_PROOF_VALIDITY_DAYS:1}
 
 cardano:
   blockfrost:
     url: ${CARDANO_BLOCKFROST_URL:https://cardano-preview.blockfrost.io/api/v0/}
-    key: ${CARDANO_BLOCKFROST_KEY:previewh76ch410Jk5ZfMNgWAiVR11yDpmx5vDm}
+    key: ${CARDANO_BLOCKFROST_KEY:previewvREIf0sMD4UsByIdbY2BhUx19MHsRqY2}
   issuer:
-    pkh:  ${CARDANO_ISSUER_PKH:c8c47610a36034aac6fc58848bdae5c278d994ff502c05455e3b3ee8}   # 28-byte payment key hash hex (56 chars)
-    vkey: ${CARDANO_ISSUER_VKEY:6ea31d27d585439ea8fd9cd8e6664ed83e605c06aec24d32dfaba488e49287d9}  # 32-byte raw Ed25519 public key hex (64 chars) — required for TEL datum
+    pkh:  ${CARDANO_ISSUER_PKH:9b29620b9a0c724f20655aa0df628d08bb10d6af7af28d39373d6947}   # 28-byte payment key hash hex (56 chars)
+    vkey: ${CARDANO_ISSUER_VKEY:5f0e88a5c707b7372dfb80cbd877389be14ec87fd300a1083aa0653ef3ec6a84}  # 32-byte raw Ed25519 public key hex (64 chars) — required for TEL datum
   network: preview
 
 apiPrefix: ${API_PREFIX:/yaci-api}
@@ -71,8 +72,8 @@ store:
     host: ${STORE_CARDANO_HOST:preview-node.play.dev.cardano.org}
     port: ${STORE_CARDANO_PORT:3001}
     protocol-magic: 2
-    sync-start-slot: 107765844
-    sync-start-blockhash: 288da6de27a405193f6f467f572e65500c0fd5b4b0dfa2ac6e5fe4d270499044
+    sync-start-slot: 109153728
+    sync-start-blockhash: a281824f37962b88997467c8935267200e142ced2f11bad025eb9bd297699b99
 #    protocol-magic: 42
 #    # for devnet we must specify the genesis files for Yaci-Store
 #    byron-genesis-file: classpath:/devkit/byron-genesis.json

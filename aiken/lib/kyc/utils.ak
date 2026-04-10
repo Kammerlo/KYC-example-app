@@ -4,26 +4,16 @@ use aiken/crypto.{blake2b_224}
 use aiken/primitive/bytearray
 use cardano/assets.{AssetName, PolicyId, Value, flatten, tokens}
 use cardano/transaction.{InlineDatum, Input, Output}
-use kyc/types.{
-  Empty, Key, NodeKey, PubKeyHash, TENode, TENodePair, WLNode, WLNodePair,
-}
+use kyc/types.{Empty, Key, NodeKey, PubKeyHash, TENode, TENodePair}
 
 // ── Token naming ──────────────────────────────────────────────────────────────
 
 /// Prefix for all TE list tokens (head node gets exactly this name)
 pub const te_prefix: ByteArray = "TEL"
 
-/// Prefix for all WL tokens (head node gets exactly this name)
-pub const wl_prefix: ByteArray = "WHL"
-
 /// Token name for a TE node whose key is `pkh`
 pub fn te_token_name(pkh: PubKeyHash) -> AssetName {
   bytearray.concat(te_prefix, pkh)
-}
-
-/// Token name for a WL node whose key is `pkh`
-pub fn wl_token_name(pkh: PubKeyHash) -> AssetName {
-  bytearray.concat(wl_prefix, pkh)
 }
 
 // ── Mint validation ───────────────────────────────────────────────────────────
@@ -92,55 +82,6 @@ pub fn te_nodes_from_outputs(
           InlineDatum(raw) -> {
             expect node: TENode = raw
             Some(TENodePair { val: output.value, node })
-          }
-          _ -> None
-        }
-      } else {
-        None
-      }
-    },
-  )
-}
-
-// ── WL node extraction ────────────────────────────────────────────────────────
-
-/// Collect all WL node datums from inputs whose value holds `cs`
-pub fn wl_nodes_from_inputs(
-  inputs: List<Input>,
-  cs: PolicyId,
-) -> List<WLNodePair> {
-  list.filter_map(
-    inputs,
-    fn(input) {
-      let Input { output, .. } = input
-      if has_policy(cs, output.value) {
-        when output.datum is {
-          InlineDatum(raw) -> {
-            expect node: WLNode = raw
-            Some(WLNodePair { val: output.value, node })
-          }
-          _ -> None
-        }
-      } else {
-        None
-      }
-    },
-  )
-}
-
-/// Collect all WL node datums from outputs whose value holds `cs`
-pub fn wl_nodes_from_outputs(
-  outputs: List<Output>,
-  cs: PolicyId,
-) -> List<WLNodePair> {
-  list.filter_map(
-    outputs,
-    fn(output) {
-      if has_policy(cs, output.value) {
-        when output.datum is {
-          InlineDatum(raw) -> {
-            expect node: WLNode = raw
-            Some(WLNodePair { val: output.value, node })
           }
           _ -> None
         }

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { type ConnectedWallet } from './wallet'
 import WalletConnect from './components/WalletConnect'
 import IssuerDashboard from './components/IssuerDashboard'
-import AllowListDashboard from './components/AllowListDashboard'
+import EntityView from './components/EntityView'
 import UserFlow from './components/UserFlow'
 
 export type Role = 'issuer' | 'entity' | 'user'
@@ -15,11 +15,8 @@ function roleLabel(role: Role) {
   return role === 'issuer' ? 'Issuer' : role === 'entity' ? 'Trusted Entity' : 'User'
 }
 
-type IssuerTab = 'tel' | 'allowlist'
-
 export default function App() {
   const [phase, setPhase] = useState<Phase>({ tag: 'wallet-connect' })
-  const [issuerTab, setIssuerTab] = useState<IssuerTab>('tel')
 
   function handleConnected(wallet: ConnectedWallet, role: Role, pkh: string, teRole?: number) {
     setPhase({ tag: 'app', wallet, role, pkh, teRole })
@@ -27,7 +24,6 @@ export default function App() {
 
   function handleDisconnect() {
     setPhase({ tag: 'wallet-connect' })
-    setIssuerTab('tel')
   }
 
   if (phase.tag === 'wallet-connect') {
@@ -50,32 +46,12 @@ export default function App() {
         </div>
       </div>
 
-      {role === 'issuer' && (
-        <div className="tab-bar">
-          <button
-            className={`tab-btn ${issuerTab === 'tel' ? 'tab-btn--active' : ''}`}
-            onClick={() => setIssuerTab('tel')}
-          >
-            Trusted Entities
-          </button>
-          <button
-            className={`tab-btn ${issuerTab === 'allowlist' ? 'tab-btn--active' : ''}`}
-            onClick={() => setIssuerTab('allowlist')}
-          >
-            Allow List
-          </button>
-        </div>
-      )}
-
       <div id="view">
-        {role === 'issuer' && issuerTab === 'tel' && (
+        {role === 'issuer' && (
           <IssuerDashboard wallet={wallet} walletPkh={phase.pkh} />
         )}
-        {role === 'issuer' && issuerTab === 'allowlist' && (
-          <AllowListDashboard wallet={wallet} walletPkh={phase.pkh} />
-        )}
-        {role === 'entity' && <AllowListDashboard wallet={wallet} walletPkh={phase.pkh} />}
-        {role === 'user' && <UserFlow />}
+        {role === 'entity' && <EntityView />}
+        {role === 'user' && <UserFlow wallet={wallet} />}
       </div>
     </div>
   )
