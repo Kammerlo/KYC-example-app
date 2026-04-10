@@ -411,7 +411,8 @@ public class KeriController {
             builder.kycProofPayload(kyc.getKycProofPayload())
                     .kycProofSignature(kyc.getKycProofSignature())
                     .kycProofEntityVkey(kyc.getKycProofEntityVkey())
-                    .kycProofTelUtxoRef(kyc.getKycProofTelUtxoRef());
+                    .kycProofTelUtxoRef(kyc.getKycProofTelUtxoRef())
+                    .kycProofValidUntil(kyc.getKycProofValidUntil());
             try {
                 builder.kycProofTelPolicyId(telService.getTePolicyId());
             } catch (IllegalStateException ignored) {
@@ -639,6 +640,7 @@ public class KeriController {
             kyc.setKycProofSignature(proof.signatureHex());
             kyc.setKycProofEntityVkey(proof.entityVkeyHex());
             kyc.setKycProofTelUtxoRef(proof.entityTelUtxoRef());
+            kyc.setKycProofValidUntil(proof.validUntilPosixMs());
             kycRepository.save(kyc);
 
             log.info("Generated KYC proof for session={}: payload={}", sessionId, proof.payloadHex());

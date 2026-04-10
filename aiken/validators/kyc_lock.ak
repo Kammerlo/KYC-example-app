@@ -1,13 +1,14 @@
 use aiken/builtin
 use aiken/collection/list
 use aiken/crypto.{verify_ed25519_signature}
+use aiken/interval.{Finite}
 use aiken/primitive/bytearray
 use cardano/assets.{PolicyId}
 use cardano/transaction.{InlineDatum, Transaction}
 
 /// Redeemer: the off-chain KYC proof produced by the trusted entity.
 pub type KycProofRedeemer {
-  /// 29-byte payload: user_pkh(28) || role(1)
+  /// 37-byte payload: user_pkh(28) || role(1) || valid_until(8)
   payload: ByteArray,
   /// 64-byte Ed25519 signature over `payload`
   signature: ByteArray,
@@ -23,6 +24,7 @@ pub type KycProofRedeemer {
 ///   1. A TEL node exists in the reference inputs (carries a TEL token)
 ///   2. The Ed25519 signature over the payload is valid (using the node's vkey)
 ///   3. The user (first 28 bytes of payload) signed the transaction
+///   4. The transaction TTL does not exceed the proof's valid_until
 validator kyc_lock(tel_policy_id: PolicyId) {
   spend(
     _datum: Option<Data>,
@@ -64,7 +66,16 @@ validator kyc_lock(tel_policy_id: PolicyId) {
     let user_pkh = bytearray.slice(payload, 0, 27)
     let user_signed = list.has(self.extra_signatories, user_pkh)
 
-    signed_by_tel_entity? && user_signed?
+    // ── 3. Transaction TTL ≤ proof valid_until ──────────────────────────
+    let valid_until =
+      bytearray.slice(payload, 29, 36) |> bytearray.to_int_big_endian
+    let ttl_ok =
+      when self.validity_range.upper_bound.bound_type is {
+        Finite(tx_ttl) -> tx_ttl <= valid_until
+        _ -> False
+      }
+
+    signed_by_tel_entity? && user_signed? && ttl_ok?
   }
 
   else(_) {

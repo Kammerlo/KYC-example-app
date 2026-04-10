@@ -45,4 +45,7 @@ public class SessionResponse {
 
     /** TEL policy id (hex). Present only after proof generation. */
     private final String kycProofTelPolicyId;
+
+    /** POSIX timestamp in milliseconds — proof expiry. Present only after proof generation. */
+    private final Long kycProofValidUntil;
 }

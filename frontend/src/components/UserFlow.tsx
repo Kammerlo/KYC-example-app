@@ -18,6 +18,7 @@ type KycProof = {
   entityVkeyHex: string
   entityTelUtxoRef: string
   telPolicyId: string
+  validUntilPosixMs: number
   role: number
   roleName: string
 }
@@ -55,7 +56,8 @@ export default function UserFlow({ wallet }: { wallet: ConnectedWallet }) {
         exists: boolean; hasCredential: boolean; hasCardanoAddress: boolean;
         attributes?: Record<string, unknown>; credentialRole?: number; credentialRoleName?: string;
         cardanoAddress?: string; kycProofPayload?: string; kycProofSignature?: string;
-        kycProofEntityVkey?: string; kycProofTelUtxoRef?: string; kycProofTelPolicyId?: string
+        kycProofEntityVkey?: string; kycProofTelUtxoRef?: string; kycProofTelPolicyId?: string;
+        kycProofValidUntil?: number
       }) => {
         if (data.hasCredential && data.attributes) {
           const roleValue = data.credentialRole ?? 0
@@ -72,6 +74,7 @@ export default function UserFlow({ wallet }: { wallet: ConnectedWallet }) {
               entityVkeyHex: data.kycProofEntityVkey!,
               entityTelUtxoRef: data.kycProofTelUtxoRef!,
               telPolicyId: data.kycProofTelPolicyId ?? '',
+              validUntilPosixMs: data.kycProofValidUntil ?? 0,
               role: roleValue,
               roleName: data.credentialRoleName ?? 'USER',
             })
@@ -563,12 +566,17 @@ function Step3({ wallet, onComplete, existingCredential }: {
 }
 
 function KycProofDisplay({ proof }: { proof: KycProof }) {
+  const validUntilStr = proof.validUntilPosixMs
+    ? `${new Date(proof.validUntilPosixMs).toISOString()} (${proof.validUntilPosixMs})`
+    : '—'
+
   const fields: { label: string; value: string; mono?: boolean }[] = [
     { label: 'Payload (hex)', value: proof.payloadHex, mono: true },
     { label: 'Signature (hex)', value: proof.signatureHex, mono: true },
     { label: 'Entity VKey (hex)', value: proof.entityVkeyHex, mono: true },
     { label: 'TEL UTxO Reference', value: proof.entityTelUtxoRef, mono: true },
     { label: 'TEL Policy ID', value: proof.telPolicyId, mono: true },
+    { label: 'Valid Until', value: validUntilStr },
     { label: 'Role', value: `${proof.roleName} (${proof.role})` },
   ]
 

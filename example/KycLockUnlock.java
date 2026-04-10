@@ -49,7 +49,7 @@ import java.util.regex.Pattern;
  *   MNEMONIC              – 24-word BIP39 mnemonic for the wallet
  *   TEL_POLICY_ID         – Policy id (hex) of the Trusted Entity List
  *   TEL_UTXO_REF          – TEL node UTxO reference, e.g. "aabb...ff#0"
- *   KYC_PAYLOAD           – 29-byte KYC proof payload (hex): user_pkh(28) || role(1)
+ *   KYC_PAYLOAD           – 37-byte KYC proof payload (hex): user_pkh(28) || role(1) || valid_until(8)
  *   KYC_SIGNATURE         – 64-byte Ed25519 signature (hex)
  *
  * Usage:
