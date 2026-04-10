@@ -17,8 +17,7 @@ type KycProof = {
   signatureHex: string
   entityVkeyHex: string
   entityTelUtxoRef: string
-  validUntilPosixMs: number
-  validUntilHuman: string
+  telPolicyId: string
   role: number
   roleName: string
 }
@@ -56,8 +55,7 @@ export default function UserFlow({ wallet }: { wallet: ConnectedWallet }) {
         exists: boolean; hasCredential: boolean; hasCardanoAddress: boolean;
         attributes?: Record<string, unknown>; credentialRole?: number; credentialRoleName?: string;
         cardanoAddress?: string; kycProofPayload?: string; kycProofSignature?: string;
-        kycProofEntityVkey?: string; kycProofTelUtxoRef?: string;
-        kycProofValidUntil?: number; kycProofValidUntilHuman?: string
+        kycProofEntityVkey?: string; kycProofTelUtxoRef?: string; kycProofTelPolicyId?: string
       }) => {
         if (data.hasCredential && data.attributes) {
           const roleValue = data.credentialRole ?? 0
@@ -73,8 +71,7 @@ export default function UserFlow({ wallet }: { wallet: ConnectedWallet }) {
               signatureHex: data.kycProofSignature!,
               entityVkeyHex: data.kycProofEntityVkey!,
               entityTelUtxoRef: data.kycProofTelUtxoRef!,
-              validUntilPosixMs: data.kycProofValidUntil!,
-              validUntilHuman: data.kycProofValidUntilHuman!,
+              telPolicyId: data.kycProofTelPolicyId ?? '',
               role: roleValue,
               roleName: data.credentialRoleName ?? 'USER',
             })
@@ -571,7 +568,7 @@ function KycProofDisplay({ proof }: { proof: KycProof }) {
     { label: 'Signature (hex)', value: proof.signatureHex, mono: true },
     { label: 'Entity VKey (hex)', value: proof.entityVkeyHex, mono: true },
     { label: 'TEL UTxO Reference', value: proof.entityTelUtxoRef, mono: true },
-    { label: 'Valid Until', value: `${new Date(proof.validUntilPosixMs).toLocaleString()} (${proof.validUntilPosixMs} ms)` },
+    { label: 'TEL Policy ID', value: proof.telPolicyId, mono: true },
     { label: 'Role', value: `${proof.roleName} (${proof.role})` },
   ]
 

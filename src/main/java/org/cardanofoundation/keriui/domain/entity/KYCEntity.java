@@ -44,8 +44,8 @@ public class KYCEntity {
     @Column(name = "credential_said")
     private String credentialSaid;
 
-    /** Hex-encoded 37-byte signed payload: user_pkh(28) || role(1) || valid_until(8). */
-    @Column(name = "kyc_proof_payload", length = 74)
+    /** Hex-encoded 29-byte signed payload: user_pkh(28) || role(1). */
+    @Column(name = "kyc_proof_payload", length = 58)
     private String kycProofPayload;
 
     /** Hex-encoded 64-byte Ed25519 signature over the payload. */
@@ -59,8 +59,4 @@ public class KYCEntity {
     /** TEL UTxO reference of the signing entity (txHash#index). */
     @Column(name = "kyc_proof_tel_utxo_ref", length = 128)
     private String kycProofTelUtxoRef;
-
-    /** Valid-until timestamp in POSIX milliseconds. */
-    @Column(name = "kyc_proof_valid_until")
-    private Long kycProofValidUntil;
 }

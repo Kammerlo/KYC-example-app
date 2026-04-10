@@ -411,11 +411,12 @@ public class KeriController {
             builder.kycProofPayload(kyc.getKycProofPayload())
                     .kycProofSignature(kyc.getKycProofSignature())
                     .kycProofEntityVkey(kyc.getKycProofEntityVkey())
-                    .kycProofTelUtxoRef(kyc.getKycProofTelUtxoRef())
-                    .kycProofValidUntil(kyc.getKycProofValidUntil())
-                    .kycProofValidUntilHuman(kyc.getKycProofValidUntil() != null
-                            ? java.time.Instant.ofEpochMilli(kyc.getKycProofValidUntil()).toString()
-                            : null);
+                    .kycProofTelUtxoRef(kyc.getKycProofTelUtxoRef());
+            try {
+                builder.kycProofTelPolicyId(telService.getTePolicyId());
+            } catch (IllegalStateException ignored) {
+                // TEL not initialised yet — omit policy id
+            }
         }
         return ResponseEntity.ok(builder.build());
     }
@@ -610,7 +611,7 @@ public class KeriController {
 
     /**
      * Generates a signed KYC proof for the user's Cardano address.
-     * The signing entity signs: user_pkh(28) || role(1) || valid_until(8).
+     * The signing entity signs: user_pkh(28) || role(1).
      */
     @PostMapping("/kyc-proof/generate")
     public ResponseEntity<?> generateKycProof(
@@ -638,7 +639,6 @@ public class KeriController {
             kyc.setKycProofSignature(proof.signatureHex());
             kyc.setKycProofEntityVkey(proof.entityVkeyHex());
             kyc.setKycProofTelUtxoRef(proof.entityTelUtxoRef());
-            kyc.setKycProofValidUntil(proof.validUntilPosixMs());
             kycRepository.save(kyc);
 
             log.info("Generated KYC proof for session={}: payload={}", sessionId, proof.payloadHex());

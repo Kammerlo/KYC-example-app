@@ -31,7 +31,7 @@ public class SessionResponse {
     /** The user's Cardano address. Present only when the wallet has been connected. */
     private final String cardanoAddress;
 
-    /** Hex-encoded 37-byte KYC proof payload. Present only after proof generation. */
+    /** Hex-encoded 29-byte KYC proof payload. Present only after proof generation. */
     private final String kycProofPayload;
 
     /** Hex-encoded 64-byte Ed25519 signature. Present only after proof generation. */
@@ -43,9 +43,6 @@ public class SessionResponse {
     /** TEL UTxO reference (txHash#index). Present only after proof generation. */
     private final String kycProofTelUtxoRef;
 
-    /** Valid-until in POSIX milliseconds. Present only after proof generation. */
-    private final Long kycProofValidUntil;
-
-    /** ISO-8601 human-readable valid-until. Present only after proof generation. */
-    private final String kycProofValidUntilHuman;
+    /** TEL policy id (hex). Present only after proof generation. */
+    private final String kycProofTelPolicyId;
 }
